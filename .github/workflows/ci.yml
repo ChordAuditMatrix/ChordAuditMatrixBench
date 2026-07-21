@@ -226,10 +226,7 @@ jobs:
           if [ -n "$PREV_TAG" ]; then
             RANGE="${PREV_TAG}..HEAD"
           else
-            RANGE="$(git rev-list --max-parents=0 HEAD)..HEAD"
-            if ! git log --pretty=format:"%s" "$RANGE" >/dev/null 2>&1; then
-              RANGE="HEAD"
-            fi
+            RANGE="HEAD"
           fi
           echo "Commit range: $RANGE"
 
