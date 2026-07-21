@@ -1,0 +1,282 @@
+name: CI
+
+# CI / Release pipeline for ChordAuditMatrixBench.
+#
+# Builds two benchmark executables on Linux, macOS, and Windows.
+# On tag pushes matching v*, the per-platform archives are packaged
+# and uploaded to a GitHub Release with a Conventional Commits changelog.
+#
+# Triggers:
+#   - push to any branch (build verification)
+#   - pull_request against any branch (build verification)
+#   - tag push matching v* (release flow with artifact upload)
+#   - workflow_dispatch (manual trigger)
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Build benchmarks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout (without submodules)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ startsWith(github.ref, 'refs/tags/v') && 0 || 1 }}
+          submodules: false
+
+      - name: Initialize submodules with cross-repo PAT
+        shell: bash
+        env:
+          CI_PAT: ${{ secrets.CI_PAT }}
+          GH_TOKEN: ${{ secrets.CI_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if [ -n "${CI_PAT:-}" ]; then
+            echo "Using CI_PAT (length: ${#CI_PAT})"
+          else
+            echo "CI_PAT not configured; falling back to GITHUB_TOKEN (length: ${#GH_TOKEN})"
+            echo "WARNING: GITHUB_TOKEN cannot access private cross-repo submodules."
+            echo "         Configure CI_PAT under Settings → Secrets → Actions."
+          fi
+          unset CI_PAT
+          git submodule sync --recursive
+          CORELIB_URL="https://x-access-token:${GH_TOKEN}@github.com/ChordAuditMatrix/CoreLib.git"
+          git config submodule.3rdparty/CoreLib.url "$CORELIB_URL"
+          git config --get submodule.3rdparty/CoreLib.url | sed -E 's#x-access-token:[^@]+@#x-access-token:***@#' | sed 's#^#Resolved 3rdparty/CoreLib URL: #'
+          git submodule update --init --recursive
+
+      # ── Platform-specific dependencies ──
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config zip
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake ninja pkg-config zip
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ninja = Get-Command ninja -ErrorAction SilentlyContinue
+          if (-not $ninja) {
+            choco install ninja -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install ninja failed" }
+          }
+          ninja --version
+
+      - name: Set up MSVC developer environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ── Configure & build ──
+
+      - name: Configure CMake (Linux & macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCAM_BUILD_TESTS=OFF \
+            -DCAM_GENERATE_DOCS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B build `
+            -G Ninja `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCAM_BUILD_TESTS=OFF `
+            -DCAM_GENERATE_DOCS=OFF
+
+      - name: Build benchmark executables
+        shell: bash
+        run: |
+          cmake --build build --parallel \
+            --target PdpChordAuditMatrixBench \
+            --target IdentityChordAuditMatrixBench
+
+      # ── Package (tag pushes only) ──
+
+      - name: Package executables (Linux)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          STAGING="ChordAuditMatrixBench-${GITHUB_REF_NAME}-linux-x64"
+          mkdir -p "${STAGING}/bin"
+          find build -type f -name 'PdpChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
+          find build -type f -name 'IdentityChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
+          cp README.md LICENSE "${STAGING}/" 2>/dev/null || true
+          zip -r "${STAGING}.zip" "${STAGING}"
+          echo "PACKAGE_PATH=${STAGING}.zip" >> "$GITHUB_ENV"
+
+      - name: Package executables (macOS)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          STAGING="ChordAuditMatrixBench-${GITHUB_REF_NAME}-macos-arm64"
+          mkdir -p "${STAGING}/bin"
+          find build -type f -name 'PdpChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
+          find build -type f -name 'IdentityChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
+          cp README.md LICENSE "${STAGING}/" 2>/dev/null || true
+          zip -r "${STAGING}.zip" "${STAGING}"
+          echo "PACKAGE_PATH=${STAGING}.zip" >> "$GITHUB_ENV"
+
+      - name: Package executables (Windows)
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $staging = "ChordAuditMatrixBench-${env:GITHUB_REF_NAME}-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$staging\bin" | Out-Null
+          Get-ChildItem -Path build -Recurse -Filter 'PdpChordAuditMatrixBench.exe' |
+            Copy-Item -Destination "$staging\bin\" -ErrorAction SilentlyContinue
+          Get-ChildItem -Path build -Recurse -Filter 'IdentityChordAuditMatrixBench.exe' |
+            Copy-Item -Destination "$staging\bin\" -ErrorAction SilentlyContinue
+          foreach ($f in @('README.md','LICENSE')) {
+            if (Test-Path $f) { Copy-Item $f -Destination "$staging\" }
+          }
+          Compress-Archive -Path "$staging" -DestinationPath "$staging.zip"
+          "PACKAGE_PATH=$staging.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload build artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChordAuditMatrixBench-${{ runner.os }}-${{ github.ref_name }}
+          path: ${{ env.PACKAGE_PATH }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Release job ──────────────────────────────────────────
+
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout (full history for changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: Flatten artifacts
+        shell: bash
+        run: |
+          set -e
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.zip' \) -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Generate changelog from conventional commits
+        id: changelog
+        shell: bash
+        run: |
+          set -e
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*' | grep -v "^${GITHUB_REF_NAME}$" | head -n 1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="$(git rev-list --max-parents=0 HEAD)..HEAD"
+            if ! git log --pretty=format:"%s" "$RANGE" >/dev/null 2>&1; then
+              RANGE="HEAD"
+            fi
+          fi
+          echo "Commit range: $RANGE"
+
+          {
+            echo "## What's Changed"
+            echo ""
+
+            print_section() {
+              local TYPE="$1"
+              local TITLE="$2"
+              local COMMITS
+              COMMITS=$(git log --pretty=format:"%s" "$RANGE" 2>/dev/null | grep -E "^${TYPE}(\(.+\))?(!)?:" || true)
+              if [ -n "$COMMITS" ]; then
+                echo "### $TITLE"
+                echo "$COMMITS" | sed -E "s/^${TYPE}(\(([^)]+)\))?(!)?:[[:space:]]*/- \2: /" | sed -E "s/^- :[[:space:]]*/- /"
+                echo ""
+              fi
+            }
+
+            print_section "feat"     "✨ Features"
+            print_section "fix"      "🐛 Bug Fixes"
+            print_section "perf"     "⚡ Performance"
+            print_section "refactor" "♻️ Refactor"
+            print_section "docs"     "📝 Documentation"
+            print_section "test"     "✅ Tests"
+            print_section "chore"    "🔧 Chore"
+            print_section "build"    "📦 Build"
+            print_section "ci"       "👷 CI"
+            print_section "style"    "💄 Style"
+
+            echo "### 📋 Full Commit List"
+            git log --pretty=format:"- %s (%h)" "$RANGE" 2>/dev/null || true
+            echo ""
+          } > /tmp/changelog.txt
+
+          {
+            echo "content<<CHANGELOG_EOF"
+            cat /tmp/changelog.txt
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ChordAuditMatrixBench ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.content }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          files: release-assets/*.zip

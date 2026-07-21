@@ -1,0 +1,37 @@
+# C++ objects and libs
+*.slo
+*.lo
+*.o
+*.a
+*.la
+*.lai
+*.so
+*.so.*
+#*.dll
+*.dylib
+
+# CMake build artifacts
+build/
+build.nosync/
+cmake_install.cmake
+CMakeCache.txt
+CTestTestfile.cmake
+Doxyfile
+DoxygenLayout.xml
+CMakeDoxyfile.in
+CMakeDoxygenDefaults.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+compile_commands.json
+Testing/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.vscode
+.idea
+*.nosync

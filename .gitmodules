@@ -1,0 +1,3 @@
+[submodule "3rdparty/CoreLib"]
+	path = 3rdparty/CoreLib
+	url = git@github.com:ChordAuditMatrix/CoreLib.git
