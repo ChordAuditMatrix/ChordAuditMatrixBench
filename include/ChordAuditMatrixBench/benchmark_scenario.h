@@ -18,15 +18,15 @@
 /**
  * @file benchmark_scenario.h
  * @brief Top-level abstract interface for benchmark scenarios
- * @details Defines the ScenarioKind enum and the BenchmarkScenario abstract
- *          class, which serves as the common base for both PDP audit and
- *          identity verification benchmark scenarios. Each concrete scenario
- *          encapsulates algorithm-specific setup, iteration, and teardown
- *          logic while sharing the BenchmarkConfig / BenchmarkResult /
- *          MetricsCollector infrastructure.
+ * @details Defines the polymorphic BenchmarkScenario abstract class, the
+ *          common base for both PDP audit and identity verification benchmark
+ *          scenarios. Each concrete scenario implements the full virtual
+ *          lifecycle: setup → prepare → runIteration → recordIteration →
+ *          computeResult → teardown. Runner calls these methods polymorphically
+ *          with zero type switch.
  * @author Dylan Liu
- * @version 2.0.0
- * @date 2026-07-05
+ * @version 4.0.0
+ * @date 2026-07-22
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_SCENARIO_H
@@ -35,44 +35,33 @@
 #include <ChordAuditMatrixBench/benchmark_types.h>
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace CAMatrix::Audit::Benchmark {
 
-/**
- * @enum ScenarioKind
- * @brief Identifies the type of benchmark scenario
- */
-enum class ScenarioKind : std::uint8_t {
-    PdpAudit,              ///< PDP audit scenario (challenge-proof-verify)
-    IdentityVerification   ///< Identity verification scenario (sign-verify)
-};
+class MetricsCollector;  // forward declaration (defined in metrics_collector.h)
 
 /**
  * @class BenchmarkScenario
  * @brief Abstract base class for all benchmark scenarios
  * @details A BenchmarkScenario encapsulates the algorithm-specific logic for
- *          setting up the benchmark environment, running a single iteration,
- *          and collecting timing/message-size metrics. Concrete subclasses
+ *          setting up the benchmark environment, running iterations, recording
+ *          outcomes, and computing the aggregated result. Concrete subclasses
  *          (PdpAuditScenario, IdentityVerifyScenario) provide the actual
  *          implementation for each scenario type.
  *
- *          Lifecycle:
- *          1. setup(config)   — one-time initialization (key generation, etc.)
- *          2. runIteration()  — called N times per parameter combination
- *          3. teardown()      — cleanup
+ *          Lifecycle (all virtual — Runner calls with zero type switch):
+ *          1. setup(config)       — one-time initialization (key generation, etc.)
+ *          2. prepare(config)     — pre-iteration preparation (PDP: corruption; Identity: noop)
+ *          3. runIteration()      — called N times per parameter combination
+ *          4. recordIteration(collector) — record per-iteration metrics (PDP/Identity-specific)
+ *          5. computeResult(...)  — aggregate into a polymorphic BenchmarkResult
+ *          6. teardown()          — cleanup
  */
 class BenchmarkScenario {
 public:
     virtual ~BenchmarkScenario() = default;
-
-    /**
-     * @brief Get the scenario type identifier
-     * @return ScenarioKind enum value
-     */
-    virtual ScenarioKind kind() const = 0;
 
     /**
      * @brief Get the algorithm type identifier
@@ -84,43 +73,64 @@ public:
      * @brief One-time setup for the benchmark environment
      * @details Creates the engine, generates keys/tags, and prepares all
      *          state needed for subsequent iterations. Must be called before
-     *          runIteration().
+     *          prepare() and runIteration().
      * @param config Benchmark configuration parameters
      */
     virtual void setup(const BenchmarkConfig& config) = 0;
 
     /**
+     * @brief Pre-iteration preparation
+     * @details PDP: calls prepareCorruption(cfg.corruptedBlocks).
+     *          Identity: no-op.
+     * @param config Benchmark configuration parameters
+     */
+    virtual void prepare(const BenchmarkConfig& config) = 0;
+
+    /**
      * @brief Run a single benchmark iteration
-     * @details Executes the core benchmark logic for one iteration (e.g.,
-     *          challenge-proof-verify for PDP, or sign-verify for identity).
-     *          After each call, getLastTimings() and getLastMessageSizes()
-     *          reflect the metrics from this iteration.
+     * @details Executes the core benchmark logic for one iteration. After each
+     *          call, getLastTimings() and getLastMessageSizes() reflect the
+     *          metrics from this iteration.
      * @return true if the iteration completed successfully, false on error
      */
     virtual bool runIteration() = 0;
 
     /**
+     * @brief Record per-iteration metrics into the collector
+     * @details PDP: records detection outcome. Identity: records TP/FP/TN/FN
+     *          per-sample outcomes from the last iteration.
+     * @param collector MetricsCollector to record into
+     */
+    virtual void recordIteration(MetricsCollector& collector) = 0;
+
+    /**
+     * @brief Compute the aggregated benchmark result
+     * @details Creates a polymorphic BenchmarkResult (PdpAuditResult or
+     *          IdentityResult), fills it from the collector and config.
+     * @param collector Aggregated metrics
+     * @param config Benchmark configuration used
+     * @return Polymorphic result pointer
+     */
+    virtual std::unique_ptr<BenchmarkResult> computeResult(
+        const MetricsCollector& collector, const BenchmarkConfig& config) = 0;
+
+    /**
      * @brief Get the timings from the most recent setup() call
-     * @return StageTimings with setup-phase durations
      */
     virtual StageTimings getSetupTimings() const = 0;
 
     /**
      * @brief Get the timings from the most recent runIteration() call
-     * @return StageTimings with iteration-phase durations
      */
     virtual StageTimings getLastTimings() const = 0;
 
     /**
      * @brief Get the message sizes from the most recent runIteration() call
-     * @return MessageSizes with challenge/proof or sign/verify byte counts
      */
     virtual MessageSizes getLastMessageSizes() const = 0;
 
     /**
      * @brief Clean up resources after benchmarking
-     * @details Releases engine, keys, and other resources. After teardown(),
-     *          setup() must be called again before runIteration().
      */
     virtual void teardown() = 0;
 };

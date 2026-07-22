@@ -20,11 +20,12 @@
  * @brief Metrics collection and aggregation for audit benchmark runs
  * @details Collects per-iteration metrics (timings, detection results,
  *          message sizes, identity verification outcomes) and provides
- *          aggregated statistics. Supports both PDP audit and identity
- *          verification benchmark scenarios via ResultKind dispatch.
+ *          scenario-specific fill methods (fillPdpResult / fillIdentityResult)
+ *          called by each concrete scenario's computeResult() to populate the
+ *          polymorphic result hierarchy.
  * @author Dylan Liu
- * @version 3.0.0
- * @date 2026-07-08
+ * @version 4.0.0
+ * @date 2026-07-22
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_METRICS_COLLECTOR_H
@@ -44,8 +45,9 @@ namespace CAMatrix::Audit::Benchmark {
  * @brief Collects and aggregates metrics from multiple benchmark iterations
  * @details Supports both PDP audit scenarios (confidence rate via recordOutcome)
  *          and identity verification scenarios (accuracy rate via
- *          recordIdentityOutcome). The computeResult() method requires a
- *          ResultKind and algorithmType to correctly populate BenchmarkResult.
+ *          recordIdentityOutcome). The legacy computeResult() with ResultKind
+ *          dispatch has been split into fillPdpResult() / fillIdentityResult()
+ *          (called by the corresponding Scenario::computeResult()).
  */
 class MetricsCollector {
 public:
@@ -57,7 +59,7 @@ public:
      */
     void recordOutcome(bool detected, const std::string& /*reason*/)
     {
-        ++totalAudits_;
+        ++iterations_;  // every recordOutcome() corresponds to one PDP iteration
         if (detected) {
             ++detections_;
         }
@@ -69,11 +71,7 @@ public:
      * @brief Record the outcome of a single identity verification sample
      * @param accepted Whether the signature was accepted by the verifier
      * @param groundTruth Whether the signature should have been accepted
-     * @details Increments the appropriate TP/FP/TN/FN counter:
-     *          - TP: accepted && shouldAccept (true accept)
-     *          - FP: accepted && !shouldAccept (false accept)
-     *          - TN: !accepted && !shouldAccept (true reject)
-     *          - FN: !accepted && shouldAccept (false reject)
+     * @details Increments the appropriate TP/FP/TN/FN counter.
      */
     void recordIdentityOutcome(bool accepted, bool groundTruth)
     {
@@ -93,7 +91,6 @@ public:
 
     /**
      * @brief Record the one-time setup stage timings
-     * @param timings Setup stage timing measurements (initAlgo + genKeys + genTags)
      */
     void recordSetupTimings(const StageTimings& timings)
     {
@@ -103,8 +100,7 @@ public:
     // ── Per-iteration timings ──
 
     /**
-     * @brief Record stage timings for a single iteration (PDP audit)
-     * @param timings Stage timing measurements
+     * @brief Record stage timings for a single iteration
      */
     void recordTimings(const StageTimings& timings)
     {
@@ -121,7 +117,6 @@ public:
 
     /**
      * @brief Record message sizes from an iteration
-     * @param sizes Message size measurements
      */
     void recordMessageSizes(const MessageSizes& sizes)
     {
@@ -134,64 +129,48 @@ public:
 
     /**
      * @brief Set peak memory usage
-     * @param bytes Peak memory usage in bytes
      */
     void setMemoryPeak(std::size_t bytes)
     {
         memoryPeakBytes_ = bytes;
     }
 
-    // ── Result computation ──
+    // ── Scenario-specific result fillers (called by Scenario::computeResult) ──
 
     /**
-     * @brief Compute the aggregated benchmark result
-     * @param config The benchmark configuration used
-     * @param resultKind Type of benchmark result (PdpAudit or IdentityVerification)
-     * @param algorithmType Algorithm type identifier (e.g., "SM9Static", "SM9Noncert")
-     * @return Aggregated BenchmarkResult
+     * @brief Fill a PdpAuditResult with PDP-specific + common metrics
+     * @details Called by PdpAuditScenario::computeResult(). Populates
+     *          totalBlocks/corruptedBlocks/sampleSize/maintenanceOps from config,
+     *          detections/confidenceRate from counters, then common metrics.
      */
-    BenchmarkResult computeResult(const BenchmarkConfig& config,
-                                  ResultKind resultKind,
-                                  const std::string& algorithmType) const
+    void fillPdpResult(PdpAuditResult& result, const PdpAuditConfig& config) const
     {
-        BenchmarkResult result;
-        result.resultKind = resultKind;
-        result.algorithmType = algorithmType;
-        result.iterations = config.iterations;
-        result.setupTimings = setupTimings_;
-        result.avgTimings = computeAvgTimings();
-        result.minTimings = computeMinTimings();
-        result.maxTimings = computeMaxTimings();
-        result.messageSizes = messageSizes_;
-        result.memoryPeakBytes = memoryPeakBytes_;
+        result.totalBlocks = config.totalBlocks;
+        result.corruptedBlocks = config.corruptedBlocks;
+        result.sampleSize = config.sampleSize;
+        result.maintenanceOps = config.maintenanceOps;
+        result.detections = detections_;
+        result.confidenceRate = (iterations_ > 0)
+            ? static_cast<double>(detections_) / static_cast<double>(iterations_) : 0.0;
+        fillCommonMetrics(result, config);
+    }
 
-        if (resultKind == ResultKind::PdpAudit) {
-            result.totalBlocks = config.totalBlocks;
-            result.corruptedBlocks = config.corruptedBlocks;
-            result.sampleSize = config.sampleSize;
-            result.totalAudits = totalAudits_;
-            result.detections = detections_;
-            result.confidenceRate = (totalAudits_ > 0)
-                ? static_cast<double>(detections_) / static_cast<double>(totalAudits_)
-                : 0.0;
-            // Dynamic PDP fields
-            result.maintenanceOps = config.maintenanceOps;
-        } else {
-            // IdentityVerification
-            result.numUsers = config.numUsers;
-            result.totalVerifySamples = totalVerifySamples_;
-            result.correctVerifications = trueAccepts_ + trueRejects_;
-            result.accuracyRate = (totalVerifySamples_ > 0)
-                ? static_cast<double>(trueAccepts_ + trueRejects_)
-                  / static_cast<double>(totalVerifySamples_)
-                : 0.0;
-            result.trueAccepts = trueAccepts_;
-            result.falseAccepts = falseAccepts_;
-            result.trueRejects = trueRejects_;
-            result.falseRejects = falseRejects_;
-        }
-
-        return result;
+    /**
+     * @brief Fill an IdentityResult with identity-specific + common metrics
+     * @details Called by IdentityVerifyScenario::computeResult().
+     */
+    void fillIdentityResult(IdentityResult& result, const IdentityConfig& config) const
+    {
+        result.numUsers = config.numUsers;
+        result.totalVerifySamples = totalVerifySamples_;
+        result.accuracyRate = (totalVerifySamples_ > 0)
+            ? static_cast<double>(trueAccepts_ + trueRejects_)
+              / static_cast<double>(totalVerifySamples_) : 0.0;
+        result.trueAccepts = trueAccepts_;
+        result.falseAccepts = falseAccepts_;
+        result.trueRejects = trueRejects_;
+        result.falseRejects = falseRejects_;
+        fillCommonMetrics(result, config);
     }
 
     // ── Reset ──
@@ -201,7 +180,7 @@ public:
      */
     void reset()
     {
-        totalAudits_ = 0;
+        iterations_ = 0;
         detections_ = 0;
         totalVerifySamples_ = 0;
         trueAccepts_ = 0;
@@ -222,7 +201,7 @@ public:
 
 private:
     // ── PDP audit counters ──
-    std::size_t totalAudits_ = 0;
+    std::size_t iterations_ = 0;      ///< Total PDP audit iterations (= detections + non-detections)
     std::size_t detections_ = 0;
 
     // ── Identity verification counters ──
@@ -242,7 +221,7 @@ private:
     std::vector<double> signMs_;
     std::vector<double> verifyMs_;
     std::vector<double> aggregateVerifyMs_;
-    std::vector<double> maintainMs_;  ///< Dynamic PDP maintenance timing
+    std::vector<double> maintainMs_;
 
     // ── Message sizes ──
     MessageSizes messageSizes_;
@@ -250,33 +229,18 @@ private:
 
     // ── Helpers ──
 
-    /**
-     * @brief Compute average of a vector of doubles
-     * @param values Vector of timing values
-     * @return Average value, or 0 if empty
-     */
     static double avg(const std::vector<double>& values)
     {
         if (values.empty()) return 0.0;
         return std::accumulate(values.begin(), values.end(), 0.0) / values.size();
     }
 
-    /**
-     * @brief Compute minimum of a vector of doubles
-     * @param values Vector of timing values
-     * @return Minimum value, or 0 if empty
-     */
     static double minVal(const std::vector<double>& values)
     {
         if (values.empty()) return 0.0;
         return *std::min_element(values.begin(), values.end());
     }
 
-    /**
-     * @brief Compute maximum of a vector of doubles
-     * @param values Vector of timing values
-     * @return Maximum value, or 0 if empty
-     */
     static double maxVal(const std::vector<double>& values)
     {
         if (values.empty()) return 0.0;
@@ -320,6 +284,18 @@ private:
         t.aggregateVerifyMs = maxVal(aggregateVerifyMs_);
         t.maintainMs = maxVal(maintainMs_);
         return t;
+    }
+
+    /// Fill common metrics shared by all result types
+    void fillCommonMetrics(BenchmarkResult& result, const BenchmarkConfig& config) const
+    {
+        result.iterations = config.iterations;
+        result.setupTimings = setupTimings_;
+        result.avgTimings = computeAvgTimings();
+        result.minTimings = computeMinTimings();
+        result.maxTimings = computeMaxTimings();
+        result.messageSizes = messageSizes_;
+        result.memoryPeakBytes = memoryPeakBytes_;
     }
 };
 
