@@ -92,11 +92,12 @@ IdentityVerifyScenario::IdentityVerifyScenario(
 
 void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
 {
-    config_ = config;
+    const auto& cfg = dynamic_cast<const IdentityConfig&>(config);
+    config_ = cfg;
 
     // Seed the RNG if pseudo-random mode is requested
-    if (config.usePseudoRandom) {
-        rng_.seed(config.seed);
+    if (cfg.usePseudoRandom) {
+        rng_.seed(cfg.seed);
     }
 
     // ── Step 1: Use injected manager ──
@@ -112,7 +113,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
 
     // ── Step 3: Derive per-user key pairs ──
     auto genKeysMs = measureMs([&] {
-        for (std::size_t i = 0; i < config.numUsers; ++i) {
+        for (std::size_t i = 0; i < cfg.numUsers; ++i) {
             auto userId = "user-" + std::to_string(i);
             auto [uPub, uPriv] = ctx_.manager->getIdentityAlgorithm(algorithmType_)->deriveUserKey(
                 *ctx_.masterPub, *ctx_.masterPriv, userId);
@@ -123,7 +124,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
 
     // ── Step 4: Generate labeled test samples (measure signing time) ──
     auto signMs = measureMs([&] {
-        ctx_.testSamples = generateTestSamples(config);
+        ctx_.testSamples = generateTestSamples(cfg);
     });
     ctx_.setupTimings.signMs = signMs;
 }
@@ -246,11 +247,44 @@ void IdentityVerifyScenario::teardown()
 }
 
 // ==================================================================
+// recordIteration() — record per-sample TP/FP/TN/FN from last iteration
+// ==================================================================
+
+void IdentityVerifyScenario::recordIteration(MetricsCollector& collector)
+{
+    // TP: accepted && shouldAccept
+    for (std::size_t tp = 0; tp < lastTA_; ++tp)
+        collector.recordIdentityOutcome(true, true);
+    // FP: accepted && !shouldAccept
+    for (std::size_t fp = 0; fp < lastFA_; ++fp)
+        collector.recordIdentityOutcome(true, false);
+    // TN: !accepted && !shouldAccept
+    for (std::size_t tn = 0; tn < lastTR_; ++tn)
+        collector.recordIdentityOutcome(false, false);
+    // FN: !accepted && shouldAccept
+    for (std::size_t fn = 0; fn < lastFR_; ++fn)
+        collector.recordIdentityOutcome(false, true);
+}
+
+// ==================================================================
+// computeResult() — returns IdentityResult
+// ==================================================================
+
+std::unique_ptr<BenchmarkResult> IdentityVerifyScenario::computeResult(
+    const MetricsCollector& collector, const BenchmarkConfig& config)
+{
+    const auto& cfg = dynamic_cast<const IdentityConfig&>(config);
+    auto result = std::make_unique<IdentityResult>();
+    collector.fillIdentityResult(*result, cfg);
+    return result;
+}
+
+// ==================================================================
 // generateTestSamples()
 // ==================================================================
 
 std::vector<IdentitySampleLabel>
-IdentityVerifyScenario::generateTestSamples(const BenchmarkConfig& config)
+IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
 {
     using AuditDataMap = CAMatrix::Audit::Messages::AuditDataMap;
 

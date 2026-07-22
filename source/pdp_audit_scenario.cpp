@@ -120,11 +120,6 @@ PdpAuditScenario::PdpAuditScenario(
 // PdpAuditScenario — BenchmarkScenario interface
 // ==================================================================
 
-ScenarioKind PdpAuditScenario::kind() const
-{
-    return ScenarioKind::PdpAudit;
-}
-
 std::string PdpAuditScenario::algorithmType() const
 {
     return algorithmType_;
@@ -136,7 +131,8 @@ std::string PdpAuditScenario::algorithmType() const
 
 void PdpAuditScenario::setup(const BenchmarkConfig& config)
 {
-    config_ = config;
+    const auto& cfg = dynamic_cast<const PdpAuditConfig&>(config);
+    config_ = cfg;
 
     // Step 1: Resolve strategy from AuditStrategyManager
     if (!strategyManager_ || !strategyManager_->hasAlgorithm(algorithmType_)) {
@@ -160,7 +156,7 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
     ctx_.fileId = "file-benchmark-" + algorithmType_;
 
     std::uint64_t blockSeed = config.usePseudoRandom ? config.seed : 42;
-    ctx_.originalBlocks = makeBlockSource(config.totalBlocks, config.blockSize, blockSeed);
+    ctx_.originalBlocks = makeBlockSource(cfg.totalBlocks, cfg.blockSize, blockSeed);
     // Initially, corruptedBlocks equals original (no corruption yet)
     ctx_.corruptedBlocks = ctx_.originalBlocks;
 
@@ -189,7 +185,7 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
         // Create and inject DynamicHashTableStateStore with bulk initialization
         // This creates all blocks with default metadata (version=1, timestamp=0)
         auto stateStore = std::make_shared<AuditCore::DynamicHashTableStateStore>();
-        stateStore->addFile(ctx_.fileId, config.totalBlocks);
+        stateStore->addFile(ctx_.fileId, cfg.totalBlocks);
 
         dynStrategy->setStateStore(stateStore);
         // Keep a reference in context for direct access (avoids protected stateStore() getter)
@@ -212,13 +208,13 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
 
     // Step 8 (dynamic PDP only): Perform maintenance operations
     if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic) {
-        if (config.maintenanceOps > 0) {
+        if (cfg.maintenanceOps > 0) {
             std::mt19937 rng(config.usePseudoRandom ? config.seed + 2 : 123);
-            std::uniform_int_distribution<std::size_t> blockIdxDist(0, config.totalBlocks - 1);
+            std::uniform_int_distribution<std::size_t> blockIdxDist(0, cfg.totalBlocks - 1);
             // MaintenanceOpType distribution: Update=0, Insert=1, Delete=2
             std::uniform_int_distribution<int> opTypeDist(0, 2);
 
-            for (std::size_t op = 0; op < config.maintenanceOps; ++op) {
+            for (std::size_t op = 0; op < cfg.maintenanceOps; ++op) {
                 auto blockIdx = blockIdxDist(rng);
                 auto opType = static_cast<AuditMsg::MaintenanceOpType>(opTypeDist(rng));
 
@@ -232,10 +228,10 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
                 // For Insert, we need pre-generated tags for the new block
                 if (opType == AuditMsg::MaintenanceOpType::Insert) {
                     // Generate a single new block and its tag
-                    auto newBlockData = std::vector<std::uint8_t>(config.blockSize, 0xAB);
+                    auto newBlockData = std::vector<std::uint8_t>(cfg.blockSize, 0xAB);
                     auto newBlockSource = std::make_shared<AuditData::MemoryAuditBlockSource>(
                         std::vector<std::vector<std::uint8_t>>{newBlockData},
-                        config.blockSize, 0);
+                        cfg.blockSize, 0);
 
                     // Generate tag for the new block
                     auto newTagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
@@ -336,6 +332,18 @@ void PdpAuditScenario::prepareCorruption(std::size_t t)
 }
 
 // ==================================================================
+// PdpAuditScenario — prepare (virtual: pre-iteration setup)
+// ==================================================================
+
+void PdpAuditScenario::prepare(const BenchmarkConfig& config)
+{
+    const auto& cfg = dynamic_cast<const PdpAuditConfig&>(config);
+    if (cfg.corruptedBlocks > 0) {
+        prepareCorruption(cfg.corruptedBlocks);
+    }
+}
+
+// ==================================================================
 // PdpAuditScenario — runIteration
 // ==================================================================
 
@@ -432,6 +440,28 @@ StageTimings PdpAuditScenario::getLastTimings() const
 MessageSizes PdpAuditScenario::getLastMessageSizes() const
 {
     return lastMessageSizes_;
+}
+
+// ==================================================================
+// PdpAuditScenario — recordIteration (virtual: PDP outcome)
+// ==================================================================
+
+void PdpAuditScenario::recordIteration(MetricsCollector& collector)
+{
+    collector.recordOutcome(lastDetected_, "");
+}
+
+// ==================================================================
+// PdpAuditScenario — computeResult (virtual: PdpAuditResult)
+// ==================================================================
+
+std::unique_ptr<BenchmarkResult> PdpAuditScenario::computeResult(
+    const MetricsCollector& collector, const BenchmarkConfig& config)
+{
+    const auto& cfg = dynamic_cast<const PdpAuditConfig&>(config);
+    auto result = std::make_unique<PdpAuditResult>();
+    collector.fillPdpResult(*result, cfg);
+    return result;
 }
 
 // ==================================================================

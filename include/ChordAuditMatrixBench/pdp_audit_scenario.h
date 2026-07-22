@@ -46,6 +46,7 @@
 
 #include <ChordAuditMatrixBench/benchmark_scenario.h>
 #include <ChordAuditMatrixBench/benchmark_types.h>
+#include <ChordAuditMatrixBench/metrics_collector.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -146,16 +147,22 @@ public:
 
     // ── BenchmarkScenario interface ──
 
-    ScenarioKind kind() const override;
     std::string algorithmType() const override;
     void setup(const BenchmarkConfig& config) override;
+    /// @brief PDP: extracts corruptedBlocks from config and calls prepareCorruption()
+    void prepare(const BenchmarkConfig& config) override;
     bool runIteration() override;
+    /// @brief PDP: records lastDetected_ into the collector
+    void recordIteration(MetricsCollector& collector) override;
+    /// @brief Returns a PdpAuditResult populated via MetricsCollector::fillPdpResult()
+    std::unique_ptr<BenchmarkResult> computeResult(
+        const MetricsCollector& collector, const BenchmarkConfig& config) override;
     StageTimings getSetupTimings() const override;
     StageTimings getLastTimings() const override;
     MessageSizes getLastMessageSizes() const override;
     void teardown() override;
 
-    // ── PDP-specific methods ──
+    // ── PDP-specific methods (still public for advanced/test use) ──
 
     /**
      * @brief Corrupt the specified number of data blocks (static PDP)
@@ -205,7 +212,7 @@ private:
     std::string algorithmType_;
     std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager_;
     PdpScenarioContext ctx_;
-    BenchmarkConfig config_;
+    PdpAuditConfig config_;
 
     // Last iteration results
     bool lastDetected_ = false;

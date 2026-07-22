@@ -40,6 +40,7 @@
 
 #include <ChordAuditMatrixBench/benchmark_scenario.h>
 #include <ChordAuditMatrixBench/benchmark_types.h>
+#include <ChordAuditMatrixBench/metrics_collector.h>
 
 #include "ChordAuditMatrixLib/interfaces/crypto/types/data.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_manager.h"
@@ -145,9 +146,6 @@ public:
         const std::string& algorithmType,
         std::shared_ptr<CAMatrix::Identity::Core::IdentityAlgorithmManager> manager);
 
-    /// @brief Returns ScenarioKind::IdentityVerification
-    ScenarioKind kind() const override { return ScenarioKind::IdentityVerification; }
-
     /// @brief Returns the algorithm type string
     std::string algorithmType() const override { return algorithmType_; }
 
@@ -158,11 +156,21 @@ public:
      */
     void setup(const BenchmarkConfig& config) override;
 
+    /// @brief Identity: no pre-iteration preparation needed
+    void prepare(const BenchmarkConfig& /*config*/) override {}
+
     /**
      * @brief Run one iteration: verify all test samples, compute TP/FP/TN/FN
      * @return true if iteration completed successfully
      */
     bool runIteration() override;
+
+    /// @brief Records per-sample TP/FP/TN/FN outcomes from the last iteration
+    void recordIteration(MetricsCollector& collector) override;
+
+    /// @brief Returns an IdentityResult populated via MetricsCollector::fillIdentityResult()
+    std::unique_ptr<BenchmarkResult> computeResult(
+        const MetricsCollector& collector, const BenchmarkConfig& config) override;
 
     /// @brief Returns setup stage timings
     StageTimings getSetupTimings() const override;
@@ -175,7 +183,6 @@ public:
 
     /**
      * @brief Release all held resources
-     * @details Resets manager, keys, test samples, and timing data
      */
     void teardown() override;
 
@@ -197,7 +204,7 @@ private:
     std::string algorithmType_;         ///< Algorithm type identifier
     std::shared_ptr<CAMatrix::Identity::Core::IdentityAlgorithmManager> manager_; ///< Injected manager
     IdentityScenarioContext ctx_;        ///< Scenario state from setup()
-    BenchmarkConfig config_;            ///< Active configuration
+    IdentityConfig config_;            ///< Active configuration
     std::mt19937 rng_;                  ///< Random number generator
 
     // ── Last iteration results ──
@@ -217,7 +224,7 @@ private:
      * @return Vector of labeled test samples
      */
     std::vector<IdentitySampleLabel> generateTestSamples(
-        const BenchmarkConfig& config);
+        const IdentityConfig& config);
 
     /**
      * @brief Pick a random user ID from the configured user set
