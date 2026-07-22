@@ -35,3 +35,6 @@ Testing/
 .vscode
 .idea
 *.nosync
+
+# Refactoring design docs (local only, not tracked)
+aidocs/
