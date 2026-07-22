@@ -48,6 +48,8 @@ endif()
 set(FRAMEWORK_SOURCE
     source/pdp_audit_scenario.cpp
     source/identity_verify_scenario.cpp
+    source/benchmark_report.cpp
+    source/benchmark_computation_strategy.cpp
 )
 
 add_library(${PROJECT_NAME} STATIC ${FRAMEWORK_SOURCE})
