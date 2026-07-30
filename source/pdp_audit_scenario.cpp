@@ -57,8 +57,6 @@
 
 // ── Dynamic PDP state store ──
 #include "ChordAuditMatrixLib/implementations/audit/state_stores/dynamic_pdp_state_store.h"
-#include "ChordAuditMatrixLib/implementations/audit/state_stores/dynamic_hash_table_state_store.h"
-#include "ChordAuditMatrixLib/implementations/audit/state_stores/versioned_block_metadata.h"
 
 // ── Block source ──
 #include "ChordAuditMatrixLib/implementations/audit/data/memory_audit_block_source.h"
@@ -182,9 +180,9 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
                 "PdpAuditScenario: strategy kind is Dynamic but dynamic_pointer_cast failed");
         }
 
-        // Create and inject DynamicHashTableStateStore with bulk initialization
+        // Create StateStore via engine (strategy declares type via createStateStore)
         // This creates all blocks with default metadata (version=1, timestamp=0)
-        auto stateStore = std::make_shared<AuditCore::DynamicHashTableStateStore>();
+        auto stateStore = ctx_.engine->createStateStore();
         stateStore->addFile(ctx_.fileId, cfg.totalBlocks);
 
         dynStrategy->setStateStore(stateStore);
@@ -194,7 +192,6 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
 
     // Step 7: Generate tags from original blocks
     // (stateStore must already be injected for dynamic PDP so that
-    //  computeBlockHash can read version/timestamp metadata)
     auto tagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
     tagsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(ctx_.originalBlocks));
     tagsDataMap->emplace("fileId", ctx_.fileId);
