@@ -543,8 +543,19 @@ IdentityVerifyStrategy::parseAndExpand(int argc, char** argv)
         SeqSpec userSpec;
         if (!resolveAxis(userAxis, userVals, userSpec)) return {};
         userVals = resolveSeq(userVals, userSpec);
-        for (auto u : userVals) configs.push_back(makeCfg(u));
+        for (auto u : userVals) {
+            if (u < 2) {
+                spdlog::warn("Skipping user-count point {}: identity verification requires >=2 users "
+                             "to construct forgery/impersonation samples.", u);
+                continue;
+            }
+            configs.push_back(makeCfg(u));
+        }
     } else {
+        if (numUsers < 2) {
+            spdlog::warn("num-users={} < 2: forgery/impersonation samples cannot be constructed "
+                         "with a single user (no other user to impersonate).", numUsers);
+        }
         configs.push_back(makeCfg(numUsers));
     }
     return configs;
