@@ -116,7 +116,7 @@ static void listAlgorithms(
 int main(int argc, char* argv[])
 {
     // ── Pre-scan global args ──
-    std::string algorithmType = "SM9Noncert";
+    std::string algorithmType;  // empty → auto-select after load
     namespace fs = std::filesystem;
     std::string defaultStrategyPath =
         (fs::path(argv[0]).parent_path() / "identity_algorithms").string();
@@ -169,7 +169,28 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    if (!identityManager->hasAlgorithm(algorithmType)) {
+    // ── Auto-select algorithm if not specified ──
+    if (algorithmType.empty()) {
+        auto available = identityManager->listAlgorithmTypes();
+        if (available.empty()) {
+            spdlog::error("No identity algorithm plugins loaded from '{}'. "
+                         "Use --strategy-path <dir> or --list-algorithms.", strategyPath);
+            return 1;
+        }
+        if (available.size() == 1) {
+            algorithmType = available[0];
+            spdlog::info("No --algorithm given; auto-selected '{}'.", algorithmType);
+        } else {
+            std::string availableStr;
+            for (std::size_t i = 0; i < available.size(); ++i) {
+                if (i > 0) availableStr += ", ";
+                availableStr += available[i];
+            }
+            spdlog::error("Multiple identity algorithms loaded [{}]. "
+                         "Specify one with --algorithm <type>.", availableStr);
+            return 1;
+        }
+    } else if (!identityManager->hasAlgorithm(algorithmType)) {
         auto available = identityManager->listAlgorithmTypes();
         std::string availableStr;
         for (std::size_t i = 0; i < available.size(); ++i) {

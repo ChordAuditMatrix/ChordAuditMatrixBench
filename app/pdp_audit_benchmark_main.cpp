@@ -160,7 +160,7 @@ static void listAlgorithms(
 int main(int argc, char* argv[])
 {
     // ── Pre-scan global args: algorithm / strategy-path / json / list / help / computation ──
-    std::string algorithmType = "SM9Static";
+    std::string algorithmType;  // empty → auto-select after load
     namespace fs = std::filesystem;
     std::string defaultStrategyPath =
         (fs::path(argv[0]).parent_path() / "strategies").string();
@@ -211,8 +211,28 @@ int main(int argc, char* argv[])
         listAlgorithms(strategyManager);
         return 0;
     }
-
-    if (!strategyManager->hasAlgorithm(algorithmType)) {
+    // ── Auto-select algorithm if not specified ──
+    if (algorithmType.empty()) {
+        auto available = strategyManager->listAlgorithmTypes();
+        if (available.empty()) {
+            spdlog::error("No audit strategy plugins loaded from '{}'. "
+                         "Use --strategy-path <dir> or --list-algorithms.", strategyPath);
+            return 1;
+        }
+        if (available.size() == 1) {
+            algorithmType = available[0];
+            spdlog::info("No --algorithm given; auto-selected '{}'.", algorithmType);
+        } else {
+            std::string availableStr;
+            for (std::size_t i = 0; i < available.size(); ++i) {
+                if (i > 0) availableStr += ", ";
+                availableStr += available[i];
+            }
+            spdlog::error("Multiple audit algorithms loaded [{}]. "
+                         "Specify one with --algorithm <type>.", availableStr);
+            return 1;
+        }
+    } else if (!strategyManager->hasAlgorithm(algorithmType)) {
         auto available = strategyManager->listAlgorithmTypes();
         std::string availableStr;
         for (std::size_t i = 0; i < available.size(); ++i) {
