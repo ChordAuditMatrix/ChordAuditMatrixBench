@@ -52,6 +52,10 @@ namespace CAMatrix::Audit::Benchmark {
  * @brief Theoretical PDP confidence rate from the hypergeometric distribution
  * @details P = 1 - C(N-t, r) / C(N, r) computed in log-space to avoid overflow.
  *          Shared by the three PDP strategies' run() methods.
+ * @param totalBlocks Total number of data blocks (N)
+ * @param corruptedBlocks Number of corrupted blocks (t)
+ * @param sampleSize Number of challenged blocks (r)
+ * @return Theoretical detection probability in [0, 1]
  */
 double theoreticalConfidenceRate(std::size_t totalBlocks,
                                   std::size_t corruptedBlocks,
@@ -70,12 +74,16 @@ public:
     virtual ~ComputationStrategy() = default;
 
     /// @brief Strategy type identifier (matches CLI --computation value)
+    /// @return Strategy type string
     virtual std::string type() const = 0;
 
     /**
      * @brief Parse CLI arguments and expand into a list of typed configs
      * @details Returns base-class pointers; each concrete strategy internally
      *          constructs PdpAuditConfig or IdentityConfig instances.
+     * @param argc Argument count from main()
+     * @param argv Argument vector from main()
+     * @return Vector of owned, typed benchmark configurations
      */
     virtual std::vector<std::unique_ptr<BenchmarkConfig>> parseAndExpand(
         int argc, char** argv) = 0;
@@ -84,12 +92,18 @@ public:
      * @brief Execute a single benchmark run
      * @details Dispatches to runner.runSingle(config) and, for PDP strategies,
      *          fills theoreticalConfidenceRate on the result.
+     * @param runner Benchmark runner owning the scenario
+     * @param config Benchmark configuration for this run
+     * @return Polymorphic benchmark result
      */
     virtual std::unique_ptr<BenchmarkResult> run(
         BenchmarkRunner& runner, const BenchmarkConfig& config) = 0;
 
     /**
      * @brief Build the strategy-appropriate Report from results
+     * @param results Aggregated benchmark results
+     * @param algorithmType Algorithm type label for the report
+     * @return Owned, strategy-specific Report
      */
     virtual std::unique_ptr<Report> createReport(
         const std::vector<std::unique_ptr<BenchmarkResult>>& results,

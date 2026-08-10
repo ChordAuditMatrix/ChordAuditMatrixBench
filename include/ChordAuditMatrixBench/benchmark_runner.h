@@ -100,6 +100,7 @@ public:
 
     /**
      * @brief Get the scenario algorithm type
+     * @return Algorithm type string of the held scenario
      */
     std::string algorithmType() const
     {
