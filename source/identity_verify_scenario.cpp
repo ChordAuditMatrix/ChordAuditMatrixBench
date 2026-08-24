@@ -486,8 +486,13 @@ bool IdentityVerifyScenario::runIteration()
     lastTimings_ = StageTimings{};
     lastTimings_.signMs = (totalSampleCount > 0) ? ctx_.setupTimings.signMs / totalSampleCount : 0;
     lastTimings_.verifyMs = (sampleCount > 0) ? totalVerifyMs / sampleCount : 0;
-    lastTimings_.aggregateVerifyMs = totalVerifyMs + totalAggregateVerifyMs;
-    lastTimings_.aggregateMs = totalAggregateMs;
+    lastTimings_.aggregateVerifyMs =
+        (sampleCount + aggregateCount > 0)
+            ? (totalVerifyMs + totalAggregateVerifyMs)
+                  / (sampleCount + aggregateCount)
+            : 0;
+    lastTimings_.aggregateMs =
+        (aggregateCount > 0) ? totalAggregateMs / aggregateCount : 0;
 
     // ── Record message sizes (average per sample) ──
     lastMessageSizes_ = MessageSizes{};
