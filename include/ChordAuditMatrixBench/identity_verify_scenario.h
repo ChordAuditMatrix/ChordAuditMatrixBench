@@ -19,20 +19,33 @@
  * @file identity_verify_scenario.h
  * @brief Identity verification benchmark scenario — concrete class
  * @details Implements BenchmarkScenario for identity verification algorithms
- *          (e.g., SM9-Noncert). The core metric is verification accuracy rate,
- *          measured against a labeled test sample set containing both positive
- *          (legitimate signatures) and negative (forged, tampered, impersonated)
- *          samples.
+ *          (e.g., SM9Noncert, SM9Online). The core metric is verification
+ *          accuracy rate, measured against a labeled test sample set
+ *          containing both positive (legitimate signatures) and negative
+ *          (forged, tampered, impersonated) samples.
+ *
+ *          Online algorithms (derived from
+ *          OnlineIdentitySigningAlgorithm) additionally exercise the
+ *          session-coordinated aggregation path: setup() derives one session
+ *          string per single-signature sample and one shared session string
+ *          per aggregate sample (n = numUsers signers); runIteration()
+ *          re-aggregates per-signer signatures (measuring aggregateMs and
+ *          aggregateSignatureBytes) and aggregate-verifies legal and tampered
+ *          samples. Cross-session mixing and duplicate-signer aggregation
+ *          rejections are counted separately (rejectedAggregation) and never
+ *          enter the TP/FP/TN/FN confusion matrix.
  *
  *          Pipeline:
- *          1. setup(): create manager → register algorithm → generate master key
- *             → derive user keys → generate test samples (sign + label)
- *          2. runIteration(): loop over test samples → aggregateVerify each
- *             → count TP/FP/TN/FN → compute accuracy rate
+ *          1. setup(): kind dispatch (Online/Offline) → create manager →
+ *             generate master key → derive user keys → generate single-signature
+ *             test samples (sign + label) + online aggregate samples
+ *          2. runIteration(): loop over test samples → aggregateVerify each;
+ *             online: aggregate + verify aggregate samples → count
+ *             TP/FP/TN/FN + rejectedAggregation → compute accuracy rate
  *
  * @author Dylan Liu
- * @version 2.0.0
- * @date 2026-07-05
+ * @version 2.1.0
+ * @date 2026-08-25
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_IDENTITY_VERIFY_SCENARIO_H
@@ -46,8 +59,10 @@
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_manager.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_params.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_request.h"
+#include "ChordAuditMatrixLib/interfaces/identity/online_identity_signing_algorithm.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -73,6 +88,7 @@ struct IdentitySampleLabel {
     std::vector<std::string> userIds; /**< N signer IDs */
     std::vector<std::shared_ptr<
         CAMatrix::Identity::Core::AlgoUserPublicParams>> userPubKeys; /**< N signer public keys */
+    std::string sessionString; /**< Online session string shared by all signers (empty for offline) */
     bool shouldAccept; /**< Ground truth: should the aggregate be accepted? */
 };
 
@@ -125,11 +141,16 @@ struct IdentityScenarioContext {
  * @details Measures verification accuracy rate (TP+TN)/(TP+FP+TN+FN) across
  *          a labeled test sample set. Supports configurable negative sample
  *          generation: forged signatures, tampered messages, and identity
- *          impersonation.
+ *          impersonation. Online algorithms additionally run the aggregate
+ *          scenario: n = numUsers signers under one shared session string,
+ *          aggregated via aggregateSessionSignatures and verified via
+ *          aggregateVerify; tampered aggregates (byte flip / roster entry
+ *          removal) must be rejected, cross-session mixing and duplicate
+ *          signers are counted as rejected aggregations.
  *
  *          Usage:
  *          ```cpp
- *          auto scenario = std::make_unique<IdentityVerifyScenario>("SM9Noncert");
+ *          auto scenario = std::make_unique<IdentityVerifyScenario>("SM9Online");
  *          scenario->setup(config);
  *          for (size_t i = 0; i < config.iterations; ++i)
  *              scenario->runIteration();
@@ -141,7 +162,7 @@ class IdentityVerifyScenario : public BenchmarkScenario {
 public:
     /**
      * @brief Construct with a specific identity algorithm type and manager
-     * @param algorithmType Algorithm identifier (e.g., "SM9Noncert")
+     * @param algorithmType Algorithm identifier (e.g., "SM9Noncert", "SM9Online")
      * @param manager Identity algorithm manager (with algorithms already registered)
      */
     IdentityVerifyScenario(
@@ -156,6 +177,8 @@ public:
      * @brief One-time setup: create manager, generate keys, build test samples
      * @param config Benchmark configuration (numUsers, samplesPerIteration, negativeSamples)
      * @throws std::invalid_argument if algorithmType is unknown
+     * @throws std::runtime_error if kind() and dynamic_cast disagree on the
+     *         Online/Offline tier of the loaded algorithm
      */
     void setup(const BenchmarkConfig& config) override;
 
@@ -221,6 +244,12 @@ private:
     IdentityConfig config_; /**< Active configuration */
     std::mt19937 rng_; /**< Random number generator */
 
+    // ── Online (session-coordinated) tier state ──
+    bool isOnline_ = false;             ///< Whether the algorithm derives from OnlineIdentitySigningAlgorithm
+    std::shared_ptr<CAMatrix::Identity::Core::OnlineIdentitySigningAlgorithm>
+        onlineAlgo_;                    ///< Online tier handle (nullptr for offline algorithms)
+    std::size_t sessionCounter_ = 0;    ///< Internal session counter for makeSessionString (NOT a CLI parameter)
+
     // ── Last iteration results ──
     double lastAccuracyRate_ = 0; /**< Accuracy rate from last iteration */
     std::size_t lastTA_ = 0; /**< True accepts from last iteration */
@@ -239,6 +268,15 @@ private:
      */
     std::vector<IdentitySampleLabel> generateTestSamples(
         const IdentityConfig& config);
+
+    /**
+     * @brief Create a unique bench session string
+     * @details sessionId = "bench-" + internal incrementing counter,
+     *          context = "IdentityVerify". Guarantees cross-session
+     *          uniqueness (a signer signs at most once per session).
+     * @return Session string from onlineAlgo_->makeSessionString()
+     */
+    std::string makeBenchSessionString();
 
     /**
      * @brief Generate a random message string

@@ -85,6 +85,11 @@ static void printUsage(const char* progName)
     spdlog::info("  --list-algorithms           List identity algorithms and exit");
     spdlog::info("  --help                      Show this help message");
     spdlog::info("");
+    spdlog::info("Online algorithms (kind=Online, e.g. SM9Online): session strings are");
+    spdlog::info("generated internally per sample (sessionId \"bench-N\", context \"IdentityVerify\").");
+    spdlog::info("With --num-users >= 2 the aggregate scenario is enabled AUTOMATICALLY");
+    spdlog::info("(n = --num-users signers per aggregate sample) — no extra flags needed.");
+    spdlog::info("");
     spdlog::info("Examples:");
     spdlog::info("  {} --algorithm SM9Noncert --num-users 10 --samples-per-iter 20", progName);
     spdlog::info("  {} --algorithm SM9Noncert --sweep --user-start 1 --user-end 1024 --user-ratio 2", progName);
