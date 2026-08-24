@@ -280,11 +280,18 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     // ── Step 5: Generate labeled test samples (measure signing time) ──
     // Online: also generate the aggregate sample set (n = numUsers signers
     // per sample, one shared session string) — auto-on, no extra CLI flag.
-    auto signMs = measureMs([&] {
+    auto singleSignMs = measureMs([&] {
         ctx_.testSamples = generateTestSamples(cfg);
+    });
+    auto aggregateSampleMs = measureMs([&] {
         ctx_.aggregateSamples = generateAggregateSamples(cfg);
     });
-    ctx_.setupTimings.signMs = signMs;
+    // signMs reports the per-owner credential-generation time (single-signature
+    // samples only). Aggregate-sample signing is identical per-owner work
+    // repeated n times (scaffolding), so it is intentionally excluded from
+    // the per-call timing average.
+    ctx_.setupTimings.signMs = singleSignMs;
+    (void)aggregateSampleMs;
 }
 
 // ==================================================================
@@ -482,10 +489,8 @@ bool IdentityVerifyScenario::runIteration()
 
     // ── Record average timings per sample ──
     std::size_t sampleCount = ctx_.testSamples.size();
-    std::size_t totalSampleCount = sampleCount + ctx_.aggregateSamples.size();
     lastTimings_ = StageTimings{};
-    lastTimings_.signMs = (totalSampleCount > 0) ? ctx_.setupTimings.signMs / totalSampleCount : 0;
-    lastTimings_.verifyMs = (sampleCount > 0) ? totalVerifyMs / sampleCount : 0;
+    lastTimings_.signMs = (sampleCount > 0) ? ctx_.setupTimings.signMs / sampleCount : 0;
     lastTimings_.aggregateVerifyMs =
         (sampleCount + aggregateCount > 0)
             ? (totalVerifyMs + totalAggregateVerifyMs)
