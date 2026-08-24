@@ -19,20 +19,33 @@
  * @file identity_verify_scenario.h
  * @brief Identity verification benchmark scenario — concrete class
  * @details Implements BenchmarkScenario for identity verification algorithms
- *          (e.g., SM9-Noncert). The core metric is verification accuracy rate,
- *          measured against a labeled test sample set containing both positive
- *          (legitimate signatures) and negative (forged, tampered, impersonated)
- *          samples.
+ *          (e.g., SM9Noncert, SM9Online). The core metric is verification
+ *          accuracy rate, measured against a labeled test sample set
+ *          containing both positive (legitimate signatures) and negative
+ *          (forged, tampered, impersonated) samples.
+ *
+ *          Online algorithms (derived from
+ *          OnlineIdentitySigningAlgorithm) additionally exercise the
+ *          session-coordinated aggregation path: setup() derives one session
+ *          string per single-signature sample and one shared session string
+ *          per aggregate sample (n = numUsers signers); runIteration()
+ *          re-aggregates per-signer signatures (measuring aggregateMs and
+ *          aggregateSignatureBytes) and aggregate-verifies legal and tampered
+ *          samples. Cross-session mixing and duplicate-signer aggregation
+ *          rejections are counted separately (rejectedAggregation) and never
+ *          enter the TP/FP/TN/FN confusion matrix.
  *
  *          Pipeline:
- *          1. setup(): create manager → register algorithm → generate master key
- *             → derive user keys → generate test samples (sign + label)
- *          2. runIteration(): loop over test samples → aggregateVerify each
- *             → count TP/FP/TN/FN → compute accuracy rate
+ *          1. setup(): kind dispatch (Online/Offline) → create manager →
+ *             generate master key → derive user keys → generate single-signature
+ *             test samples (sign + label) + online aggregate samples
+ *          2. runIteration(): loop over test samples → aggregateVerify each;
+ *             online: aggregate + verify aggregate samples → count
+ *             TP/FP/TN/FN + rejectedAggregation → compute accuracy rate
  *
  * @author Dylan Liu
- * @version 2.0.0
- * @date 2026-07-05
+ * @version 2.1.0
+ * @date 2026-08-25
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_IDENTITY_VERIFY_SCENARIO_H
@@ -46,8 +59,10 @@
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_manager.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_params.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_request.h"
+#include "ChordAuditMatrixLib/interfaces/identity/online_identity_signing_algorithm.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -72,6 +87,46 @@ struct IdentitySampleLabel {
     CAMatrix::Crypto::CryptoArray signature;     ///< Raw signature bytes (may be forged)
     std::string userId;                         ///< Claimed user identity
     bool shouldAccept;                          ///< Ground truth: should the signature be accepted?
+};
+
+// ==================================================================
+// Online aggregate sample (session-coordinated, n = numUsers signers)
+// ==================================================================
+
+/**
+ * @enum AggregateTamperMode
+ * @brief Construction mode of an online aggregate verification sample
+ * @details Online aggregate samples exercise the session-coordinated
+ *          aggregation path (OnlineIdentitySigningAlgorithm::
+ *          aggregateSessionSignatures). Verify-path samples (None / FlipByte /
+ *          RemoveEntry) enter the TP/FP/TN/FN confusion matrix; aggregation
+ *          rejection samples (CrossSession / DuplicateSigner) are counted
+ *          separately as rejected aggregations and never enter the matrix.
+ */
+enum class AggregateTamperMode : std::uint8_t {
+    None,           ///< Legal: n distinct signers under one session → expect accept (TP)
+    FlipByte,       ///< Legal aggregation, then one byte flipped inside the aggregate bytes → expect reject (TN)
+    RemoveEntry,    ///< Legal aggregation, then one signer entry removed from the ONA roster → expect reject (TN)
+    CrossSession,   ///< n-1 signers under one session + 1 under another → aggregation must reject (rejectedAggregation)
+    DuplicateSigner ///< Same (session, userId) signs twice → aggregation must reject (rejectedAggregation)
+};
+
+/**
+ * @struct IdentityAggregateSample
+ * @brief A single online aggregate verification sample
+ * @details Holds the n = numUsers per-signer (userId, message, signature)
+ *          triples produced under one shared session string, plus the tamper
+ *          mode deciding the expected outcome. Per-signer signatures are
+ *          aggregated at runIteration() time so the aggregation stage
+ *          (aggregateMs) is measured per iteration.
+ */
+struct IdentityAggregateSample {
+    std::string sessionString;                            ///< Session string shared by all signers (aggregation input)
+    std::string sessionString2;                           ///< Second session string (CrossSession only)
+    std::vector<std::string> userIds;                     ///< Signer list (distinct per session)
+    std::vector<CAMatrix::Crypto::CryptoArray> messages;   ///< Per-signer messages (raw bytes)
+    std::vector<CAMatrix::Crypto::CryptoArray> signatures; ///< Per-signer signatures (serialized)
+    AggregateTamperMode tamperMode = AggregateTamperMode::None; ///< Sample construction mode
 };
 
 // ==================================================================
@@ -109,6 +164,9 @@ struct IdentityScenarioContext {
     /** @brief Labeled test sample set (positive + negative) */
     std::vector<IdentitySampleLabel> testSamples;
 
+    /** @brief Online aggregate sample set (empty for offline algorithms) */
+    std::vector<IdentityAggregateSample> aggregateSamples;
+
     /** @brief Setup stage timing measurements */
     StageTimings setupTimings;
 };
@@ -123,11 +181,16 @@ struct IdentityScenarioContext {
  * @details Measures verification accuracy rate (TP+TN)/(TP+FP+TN+FN) across
  *          a labeled test sample set. Supports configurable negative sample
  *          generation: forged signatures, tampered messages, and identity
- *          impersonation.
+ *          impersonation. Online algorithms additionally run the aggregate
+ *          scenario: n = numUsers signers under one shared session string,
+ *          aggregated via aggregateSessionSignatures and verified via
+ *          aggregateVerify; tampered aggregates (byte flip / roster entry
+ *          removal) must be rejected, cross-session mixing and duplicate
+ *          signers are counted as rejected aggregations.
  *
  *          Usage:
  *          ```cpp
- *          auto scenario = std::make_unique<IdentityVerifyScenario>("SM9Noncert");
+ *          auto scenario = std::make_unique<IdentityVerifyScenario>("SM9Online");
  *          scenario->setup(config);
  *          for (size_t i = 0; i < config.iterations; ++i)
  *              scenario->runIteration();
@@ -139,7 +202,7 @@ class IdentityVerifyScenario : public BenchmarkScenario {
 public:
     /**
      * @brief Construct with a specific identity algorithm type and manager
-     * @param algorithmType Algorithm identifier (e.g., "SM9Noncert")
+     * @param algorithmType Algorithm identifier (e.g., "SM9Noncert", "SM9Online")
      * @param manager Identity algorithm manager (with algorithms already registered)
      */
     IdentityVerifyScenario(
@@ -153,6 +216,8 @@ public:
      * @brief One-time setup: create manager, generate keys, build test samples
      * @param config Benchmark configuration (numUsers, samplesPerIteration, negativeSamples)
      * @throws std::invalid_argument if algorithmType is unknown
+     * @throws std::runtime_error if kind() and dynamic_cast disagree on the
+     *         Online/Offline tier of the loaded algorithm
      */
     void setup(const BenchmarkConfig& config) override;
 
@@ -200,6 +265,9 @@ public:
     /// @brief False rejects (FN) from the most recent iteration
     std::size_t lastFalseRejects() const { return lastFR_; }
 
+    /// @brief Aggregation rejections (cross-session mixing / duplicate signer) from the most recent iteration
+    std::size_t lastRejectedAggregations() const { return lastRejectedAggregation_; }
+
 private:
     std::string algorithmType_;         ///< Algorithm type identifier
     std::shared_ptr<CAMatrix::Identity::Core::IdentityAlgorithmManager> manager_; ///< Injected manager
@@ -207,12 +275,19 @@ private:
     IdentityConfig config_;            ///< Active configuration
     std::mt19937 rng_;                  ///< Random number generator
 
+    // ── Online (session-coordinated) tier state ──
+    bool isOnline_ = false;             ///< Whether the algorithm derives from OnlineIdentitySigningAlgorithm
+    std::shared_ptr<CAMatrix::Identity::Core::OnlineIdentitySigningAlgorithm>
+        onlineAlgo_;                    ///< Online tier handle (nullptr for offline algorithms)
+    std::size_t sessionCounter_ = 0;    ///< Internal session counter for makeSessionString (NOT a CLI parameter)
+
     // ── Last iteration results ──
     double lastAccuracyRate_ = 0;       ///< Accuracy rate from last iteration
     std::size_t lastTA_ = 0;           ///< True accepts from last iteration
     std::size_t lastFA_ = 0;           ///< False accepts from last iteration
     std::size_t lastTR_ = 0;           ///< True rejects from last iteration
     std::size_t lastFR_ = 0;           ///< False rejects from last iteration
+    std::size_t lastRejectedAggregation_ = 0; ///< Aggregation rejections from last iteration
     StageTimings lastTimings_;          ///< Per-stage timings from last iteration
     MessageSizes lastMessageSizes_;     ///< Message sizes from last iteration
 
@@ -225,6 +300,28 @@ private:
      */
     std::vector<IdentitySampleLabel> generateTestSamples(
         const IdentityConfig& config);
+
+    /**
+     * @brief Generate the online aggregate sample set (n = numUsers signers)
+     * @details Auto-enabled for online algorithms with numUsers >= 2 (no extra
+     *          CLI parameter). Legal and verify-path tampered aggregate sample
+     *          counts are equal (doc §2.3 口径) so aggregate accuracy is
+     *          unbiased; cross-session mixing and duplicate-signer samples are
+     *          counted as rejected aggregations.
+     * @param config Configuration (numUsers = signers per aggregate sample)
+     * @return Vector of aggregate samples (empty for offline algorithms)
+     */
+    std::vector<IdentityAggregateSample> generateAggregateSamples(
+        const IdentityConfig& config);
+
+    /**
+     * @brief Create a unique bench session string
+     * @details sessionId = "bench-" + internal incrementing counter,
+     *          context = "IdentityVerify". Guarantees cross-session
+     *          uniqueness (a signer signs at most once per session).
+     * @return Session string from onlineAlgo_->makeSessionString()
+     */
+    std::string makeBenchSessionString();
 
     /**
      * @brief Pick a random user ID from the configured user set

@@ -21,10 +21,16 @@
  * @details Implements the setup/runIteration/teardown lifecycle for identity
  *          verification benchmarking. Generates labeled test samples containing
  *          legitimate signatures and various forgery types, then measures
- *          verification accuracy across iterations.
+ *          verification accuracy across iterations. Online algorithms
+ *          (OnlineIdentitySigningAlgorithm tier) additionally generate
+ *          session-coordinated aggregate samples: n = numUsers signers under
+ *          one shared session string, aggregated per iteration (aggregateMs /
+ *          aggregateSignatureBytes) and verified; tampered aggregates are
+ *          rejected, cross-session mixing and duplicate signers are counted
+ *          as rejected aggregations.
  * @author Dylan Liu
- * @version 2.0.0
- * @date 2026-07-05
+ * @version 2.1.0
+ * @date 2026-08-25
  */
 
 #include <ChordAuditMatrixBench/identity_verify_scenario.h>
@@ -36,6 +42,7 @@
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_manager.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_algorithm_params.h"
 #include "ChordAuditMatrixLib/interfaces/identity/identity_request.h"
+#include "ChordAuditMatrixLib/interfaces/identity/online_identity_signing_algorithm.h"
 
 // ── AuditDataMap for algorithm input ──
 #include "ChordAuditMatrixLib/interfaces/audit/messages/audit_data_map.h"
@@ -43,7 +50,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <random>
+#include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -66,6 +76,128 @@ double measureMs(F&& f)
     std::forward<F>(f)();
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+/**
+ * @brief Read a little-endian uint32 from a byte buffer
+ * @param p [IN] Byte buffer
+ * @param o [IN] Byte offset (requires o + 4 <= available bytes)
+ * @return Little-endian uint32 value
+ */
+std::uint32_t onaReadU32Le(const std::uint8_t* p, std::size_t o)
+{
+    return static_cast<std::uint32_t>(p[o])
+        | (static_cast<std::uint32_t>(p[o + 1]) << 8)
+        | (static_cast<std::uint32_t>(p[o + 2]) << 16)
+        | (static_cast<std::uint32_t>(p[o + 3]) << 24);
+}
+
+/**
+ * @brief Remove one signer entry from a serialized ONA aggregate record
+ * @details ONA layout (在线多重签名实现文档.md §5.2):
+ *          magic 'O','N','A',0x01 | wLen(4B LE) | w | n(4B LE)
+ *          | n × (IDLen(4B LE), ID, mLen(4B LE), m) | S(96B) | T(192B).
+ *          Rebuilds a well-formed record with the middle signer entry
+ *          removed and n decremented (the roster has one fewer signer).
+ * @param aggregate [IN] Serialized ONA aggregate signature
+ * @return Rebuilt aggregate without one signer entry, or std::nullopt if
+ *         the record does not parse per the serialization spec
+ */
+std::optional<CAMatrix::Crypto::CryptoArray> removeOneOnaEntry(
+    const CAMatrix::Crypto::CryptoArray& aggregate)
+{
+    const auto* p = aggregate.data();
+    const std::size_t size = aggregate.size();
+    if (size < 4 + 4 + 4 + 96 + 192) {
+        return std::nullopt;
+    }
+    if (p[0] != 'O' || p[1] != 'N' || p[2] != 'A' || p[3] != 0x01) {
+        return std::nullopt;
+    }
+    std::size_t off = 4;
+    const std::uint32_t wLen = onaReadU32Le(p, off);
+    off += 4;
+    if (off + wLen > size) {
+        return std::nullopt;
+    }
+    off += wLen;
+    const std::uint32_t n = onaReadU32Le(p, off);
+    off += 4;
+    if (n == 0) {
+        return std::nullopt;
+    }
+    std::vector<std::pair<std::size_t, std::size_t>> entries;
+    entries.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        const std::size_t start = off;
+        if (off + 4 > size) {
+            return std::nullopt;
+        }
+        const std::uint32_t idLen = onaReadU32Le(p, off);
+        off += 4;
+        if (off + idLen > size) {
+            return std::nullopt;
+        }
+        off += idLen;
+        if (off + 4 > size) {
+            return std::nullopt;
+        }
+        const std::uint32_t mLen = onaReadU32Le(p, off);
+        off += 4;
+        if (off + mLen > size) {
+            return std::nullopt;
+        }
+        off += mLen;
+        entries.emplace_back(start, off);
+    }
+    // S (96 B) + T (192 B) tail
+    if (off + 96 + 192 != size) {
+        return std::nullopt;
+    }
+
+    const std::size_t removeIdx = n / 2;
+    CAMatrix::Crypto::CryptoArray out;
+    out.reserve(size - (entries[removeIdx].second - entries[removeIdx].first));
+    // magic
+    out.insert(out.end(), {'O', 'N', 'A', 0x01});
+    // wLen (4 B) + w
+    out.insert(out.end(), p + 4, p + 8 + wLen);
+    // n - 1 (little-endian)
+    const std::uint32_t newN = n - 1;
+    out.push_back(static_cast<std::uint8_t>(newN & 0xFF));
+    out.push_back(static_cast<std::uint8_t>((newN >> 8) & 0xFF));
+    out.push_back(static_cast<std::uint8_t>((newN >> 16) & 0xFF));
+    out.push_back(static_cast<std::uint8_t>((newN >> 24) & 0xFF));
+    // remaining signer entries
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i == removeIdx) {
+            continue;
+        }
+        out.insert(out.end(), p + entries[i].first, p + entries[i].second);
+    }
+    // S + T tail
+    out.insert(out.end(), p + off, p + size);
+    return out;
+}
+
+/**
+ * @brief Flip one byte inside the signature element (S) of an aggregate
+ * @details The ONA tail is S (96 B) then T (192 B); flipping a byte inside
+ *          S changes the aggregate signature element so the pairing
+ *          verification must fail (doc §2.3 byte-flip tamper sample).
+ * @param aggregate [IN/OUT] Aggregate signature bytes
+ */
+void flipAggregateSignatureByte(CAMatrix::Crypto::CryptoArray& aggregate)
+{
+    if (aggregate.empty()) {
+        return;
+    }
+    const std::size_t tail = (aggregate.size() >= 288) ? aggregate.size() - 288 : 0;
+    std::size_t flipAt = tail + 48; // middle of S
+    if (flipAt >= aggregate.size()) {
+        flipAt = aggregate.size() - 1;
+    }
+    aggregate[flipAt] ^= 0x01;
 }
 
 } // anonymous namespace
@@ -103,7 +235,30 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     // ── Step 1: Use injected manager ──
     ctx_.manager = manager_;
 
-    // ── Step 2: Generate master key pair ──
+    // ── Step 2: Kind dispatch — online (session-coordinated) vs offline ──
+    {
+        auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+        auto onlineAlgo = std::dynamic_pointer_cast<
+            CAMatrix::Identity::Core::OnlineIdentitySigningAlgorithm>(algo);
+        isOnline_ = (onlineAlgo != nullptr);
+        if (isOnline_) {
+            onlineAlgo_ = std::move(onlineAlgo);
+        }
+        // Consistency check: dynamic_cast result and kind() must agree
+        // (OnlineIdentitySigningAlgorithm finalizes kind() = Online).
+        const bool kindOnline =
+            (algo->kind() == CAMatrix::Identity::Core::IdentityAlgorithmKind::Online);
+        if (isOnline_ != kindOnline) {
+            spdlog::error("IdentityVerifyScenario: kind()/dynamic_cast mismatch for algorithm '{}' "
+                          "(derived from Online tier: {}, kind() == Online: {})",
+                          algorithmType_, isOnline_, kindOnline);
+            throw std::runtime_error(
+                "IdentityVerifyScenario: kind()/dynamic_cast mismatch — algorithm '" +
+                algorithmType_ + "' violates the Online/Offline tier contract");
+        }
+    }
+
+    // ── Step 3: Generate master key pair ──
     auto initMs = measureMs([&] {
         auto [pub, priv] = ctx_.manager->getIdentityAlgorithm(algorithmType_)->generateMasterKey();
         ctx_.masterPub = pub;
@@ -111,7 +266,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     });
     ctx_.setupTimings.initAlgoMs = initMs;
 
-    // ── Step 3: Derive per-user key pairs ──
+    // ── Step 4: Derive per-user key pairs ──
     auto genKeysMs = measureMs([&] {
         for (std::size_t i = 0; i < cfg.numUsers; ++i) {
             auto userId = "user-" + std::to_string(i);
@@ -122,9 +277,12 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     });
     ctx_.setupTimings.genKeysMs = genKeysMs;
 
-    // ── Step 4: Generate labeled test samples (measure signing time) ──
+    // ── Step 5: Generate labeled test samples (measure signing time) ──
+    // Online: also generate the aggregate sample set (n = numUsers signers
+    // per sample, one shared session string) — auto-on, no extra CLI flag.
     auto signMs = measureMs([&] {
         ctx_.testSamples = generateTestSamples(cfg);
+        ctx_.aggregateSamples = generateAggregateSamples(cfg);
     });
     ctx_.setupTimings.signMs = signMs;
 }
@@ -138,6 +296,7 @@ bool IdentityVerifyScenario::runIteration()
     using AuditDataMap = CAMatrix::Audit::Messages::AuditDataMap;
 
     lastTA_ = lastFA_ = lastTR_ = lastFR_ = 0;
+    lastRejectedAggregation_ = 0;
     double totalSignMs = 0;
     double totalVerifyMs = 0;
     std::size_t totalSignatureBytes = 0;
@@ -191,6 +350,130 @@ bool IdentityVerifyScenario::runIteration()
         }
     }
 
+    // ── Online aggregate samples (n = numUsers signers, one shared session) ──
+    double totalAggregateMs = 0;
+    double totalAggregateVerifyMs = 0;
+    std::size_t totalAggregateBytes = 0;
+    std::size_t aggregateCount = 0;
+    if (isOnline_ && !ctx_.aggregateSamples.empty()) {
+        for (const auto& sample : ctx_.aggregateSamples) {
+            // ── Aggregation rejection checks (cross-session / duplicate):
+            //    never enter the TP/FP/TN/FN confusion matrix ──
+            if (sample.tamperMode == AggregateTamperMode::CrossSession ||
+                sample.tamperMode == AggregateTamperMode::DuplicateSigner) {
+                bool aggregationRejected = false;
+                try {
+                    auto result = onlineAlgo_->aggregateSessionSignatures(
+                        sample.signatures, sample.sessionString);
+                    aggregationRejected = result.empty(); // empty result = failure
+                } catch (const std::exception&) {
+                    aggregationRejected = true;
+                }
+                if (aggregationRejected) {
+                    ++lastRejectedAggregation_;
+                }
+                continue;
+            }
+
+            // ── Verify-path sample: aggregate (timed) → tamper → aggregateVerify ──
+            CAMatrix::Crypto::CryptoArray aggregate;
+            bool aggregateOk = true;
+            try {
+                const double aggMs = measureMs([&] {
+                    aggregate = onlineAlgo_->aggregateSessionSignatures(
+                        sample.signatures, sample.sessionString);
+                });
+                totalAggregateMs += aggMs;
+            } catch (const std::exception&) {
+                aggregateOk = false;
+            }
+
+            if (!aggregateOk) {
+                // Aggregation failed on a verify-path sample → outcome is reject
+                if (sample.tamperMode == AggregateTamperMode::None) {
+                    ++lastFR_; // legal sample wrongly rejected
+                } else {
+                    ++lastTR_; // tampered sample rejected as expected
+                }
+                continue;
+            }
+
+            ++aggregateCount;
+            totalAggregateBytes += aggregate.size();
+
+            // ── Build the verifier's signer list ──
+            std::vector<std::string> verifyUserIds = sample.userIds;
+            std::vector<std::shared_ptr<
+                CAMatrix::Identity::Core::AlgoUserPublicParams>> verifyPubKeys;
+            verifyPubKeys.reserve(sample.userIds.size());
+            for (const auto& userId : sample.userIds) {
+                auto keyIt = ctx_.userKeys.find(userId);
+                if (keyIt == ctx_.userKeys.end()) {
+                    aggregateOk = false;
+                    break;
+                }
+                verifyPubKeys.push_back(keyIt->second.pub);
+            }
+            if (!aggregateOk) {
+                if (sample.tamperMode == AggregateTamperMode::None) {
+                    ++lastFR_;
+                } else {
+                    ++lastTR_;
+                }
+                continue;
+            }
+
+            // ── Apply the tamper construction ──
+            bool shouldAccept = true;
+            if (sample.tamperMode == AggregateTamperMode::FlipByte) {
+                flipAggregateSignatureByte(aggregate);
+                shouldAccept = false;
+            } else if (sample.tamperMode == AggregateTamperMode::RemoveEntry) {
+                auto stripped = removeOneOnaEntry(aggregate);
+                if (stripped) {
+                    aggregate = std::move(*stripped);
+                }
+                // Drop the same roster position from the verifier's signer list
+                // (if the ONA parse failed, the roster/signer-list mismatch
+                //  still makes verification reject).
+                const std::size_t removeIdx = sample.userIds.size() / 2;
+                verifyUserIds.erase(verifyUserIds.begin() + removeIdx);
+                verifyPubKeys.erase(verifyPubKeys.begin() + removeIdx);
+                shouldAccept = false;
+            }
+
+            // ── Verify the (possibly tampered) aggregate ──
+            AuditDataMap verifyInput;
+            verifyInput.emplace("aggregateSignature", aggregate);
+            verifyInput.emplace("message", sample.messages.front());
+            verifyInput.emplace("masterPub", ctx_.masterPub);
+            verifyInput.emplace("userIds", verifyUserIds);
+            verifyInput.emplace("userPubKeys", verifyPubKeys);
+
+            bool accepted = false;
+            const double verifyMs = measureMs([&] {
+                auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+                auto variant = algo->createRequest(
+                    CAMatrix::Identity::Core::IdentityOperation::Verify, verifyInput);
+                auto req = std::get<std::shared_ptr<
+                    CAMatrix::Identity::Core::AggregateVerifyRequest>>(*variant);
+                accepted = algo->aggregateVerify(*req);
+            });
+            totalAggregateVerifyMs += verifyMs;
+
+            if (shouldAccept && accepted) {
+                ++lastTA_;
+            } else if (!shouldAccept && accepted) {
+                ++lastFA_;
+            } else if (!shouldAccept && !accepted) {
+                ++lastTR_;
+            } else {
+                // shouldAccept && !accepted → FN
+                ++lastFR_;
+            }
+        }
+    }
+
     // ── Compute accuracy rate ──
     std::size_t total = lastTA_ + lastFA_ + lastTR_ + lastFR_;
     lastAccuracyRate_ = (total > 0)
@@ -199,10 +482,12 @@ bool IdentityVerifyScenario::runIteration()
 
     // ── Record average timings per sample ──
     std::size_t sampleCount = ctx_.testSamples.size();
+    std::size_t totalSampleCount = sampleCount + ctx_.aggregateSamples.size();
     lastTimings_ = StageTimings{};
-    lastTimings_.signMs = (sampleCount > 0) ? ctx_.setupTimings.signMs / sampleCount : 0;
+    lastTimings_.signMs = (totalSampleCount > 0) ? ctx_.setupTimings.signMs / totalSampleCount : 0;
     lastTimings_.verifyMs = (sampleCount > 0) ? totalVerifyMs / sampleCount : 0;
-    lastTimings_.aggregateVerifyMs = totalVerifyMs;
+    lastTimings_.aggregateVerifyMs = totalVerifyMs + totalAggregateVerifyMs;
+    lastTimings_.aggregateMs = totalAggregateMs;
 
     // ── Record message sizes (average per sample) ──
     lastMessageSizes_ = MessageSizes{};
@@ -210,6 +495,8 @@ bool IdentityVerifyScenario::runIteration()
         (sampleCount > 0) ? totalSignatureBytes / sampleCount : 0;
     lastMessageSizes_.verifyRequestBytes =
         (sampleCount > 0) ? totalVerifyRequestBytes / sampleCount : 0;
+    lastMessageSizes_.aggregateSignatureBytes =
+        (aggregateCount > 0) ? totalAggregateBytes / aggregateCount : 0;
 
     return true;
 }
@@ -242,6 +529,7 @@ void IdentityVerifyScenario::teardown()
     ctx_ = IdentityScenarioContext{};
     lastAccuracyRate_ = 0;
     lastTA_ = lastFA_ = lastTR_ = lastFR_ = 0;
+    lastRejectedAggregation_ = 0;
     lastTimings_ = StageTimings{};
     lastMessageSizes_ = MessageSizes{};
 }
@@ -264,6 +552,9 @@ void IdentityVerifyScenario::recordIteration(MetricsCollector& collector)
     // FN: !accepted && shouldAccept
     for (std::size_t fn = 0; fn < lastFR_; ++fn)
         collector.recordIdentityOutcome(false, true);
+    // Online aggregation rejections (cross-session / duplicate signer):
+    // counted separately, never part of the confusion matrix
+    collector.recordRejectedAggregation(lastRejectedAggregation_);
 }
 
 // ==================================================================
@@ -276,6 +567,8 @@ std::unique_ptr<BenchmarkResult> IdentityVerifyScenario::computeResult(
     const auto& cfg = dynamic_cast<const IdentityConfig&>(config);
     auto result = std::make_unique<IdentityResult>();
     collector.fillIdentityResult(*result, cfg);
+    result->algorithmKind = isOnline_ ? "Online" : "Offline";
+    result->aggregateSigners = (isOnline_ && cfg.numUsers >= 2) ? cfg.numUsers : 0;
     return result;
 }
 
@@ -311,6 +604,9 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
         signInput.emplace("userId", userId);
         signInput.emplace("masterPub", ctx_.masterPub);
         signInput.emplace("userPriv", it->second.priv);
+        if (isOnline_) {
+            signInput.emplace("sessionString", makeBenchSessionString());
+        }
 
         CAMatrix::Crypto::CryptoArray signature;
         try {
@@ -346,6 +642,9 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
         signInput.emplace("userId", otherUser);
         signInput.emplace("masterPub", ctx_.masterPub);
         signInput.emplace("userPriv", it->second.priv);
+        if (isOnline_) {
+            signInput.emplace("sessionString", makeBenchSessionString());
+        }
 
         CAMatrix::Crypto::CryptoArray signature;
         try {
@@ -382,6 +681,9 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
         signInput.emplace("userId", userId);
         signInput.emplace("masterPub", ctx_.masterPub);
         signInput.emplace("userPriv", it->second.priv);
+        if (isOnline_) {
+            signInput.emplace("sessionString", makeBenchSessionString());
+        }
 
         CAMatrix::Crypto::CryptoArray signature;
         try {
@@ -418,6 +720,9 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
         signInput.emplace("userId", fakeUser);
         signInput.emplace("masterPub", ctx_.masterPub);
         signInput.emplace("userPriv", itFake->second.priv);
+        if (isOnline_) {
+            signInput.emplace("sessionString", makeBenchSessionString());
+        }
 
         CAMatrix::Crypto::CryptoArray signature;
         try {
@@ -440,6 +745,194 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
     std::shuffle(samples.begin(), samples.end(), rng_);
 
     return samples;
+}
+
+// ==================================================================
+// generateAggregateSamples() — online aggregate samples (n = numUsers)
+// ==================================================================
+
+std::vector<IdentityAggregateSample>
+IdentityVerifyScenario::generateAggregateSamples(const IdentityConfig& config)
+{
+    using AuditDataMap = CAMatrix::Audit::Messages::AuditDataMap;
+
+    std::vector<IdentityAggregateSample> samples;
+    // Aggregate scenario is auto-on: online algorithm AND numUsers >= 2
+    // (reuses --num-users; no new CLI parameter).
+    if (!isOnline_ || config.numUsers < 2) {
+        return samples;
+    }
+    const std::size_t n = config.numUsers;
+
+    // Sample counts per kind. Legal and verify-path tampered counts are EQUAL
+    // (doc §2.3 口径) so the aggregate accuracy contribution is unbiased.
+    const std::size_t legalCount = 4;
+    const std::size_t flipByteCount = 2;
+    const std::size_t removeEntryCount = 2; // total verify-path tampered = 4 == legalCount
+    const std::size_t crossSessionCount = 1;
+    const std::size_t duplicateCount = 1;
+
+    // Sign one message for a user under a session string
+    auto signFor = [&](const std::string& userId,
+                       const std::string& message,
+                       const std::string& sessionString)
+        -> CAMatrix::Crypto::CryptoArray {
+        auto it = ctx_.userKeys.find(userId);
+        if (it == ctx_.userKeys.end()) {
+            return {};
+        }
+        AuditDataMap signInput;
+        signInput.emplace("message",
+            CAMatrix::Crypto::CryptoArray(message.begin(), message.end()));
+        signInput.emplace("userId", userId);
+        signInput.emplace("masterPub", ctx_.masterPub);
+        signInput.emplace("userPriv", it->second.priv);
+        signInput.emplace("sessionString", sessionString);
+        try {
+            auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+            auto variant = algo->createRequest(
+                CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
+            auto req = std::get<std::shared_ptr<
+                CAMatrix::Identity::Core::SignRequest>>(*variant);
+            return algo->sign(*req);
+        } catch (...) {
+            return {};
+        }
+    };
+
+    // Fill n signers, each signing a distinct message under one session
+    auto fillSample = [&](IdentityAggregateSample& sample) -> bool {
+        for (std::size_t i = 0; i < n; ++i) {
+            auto userId = "user-" + std::to_string(i);
+            auto message = randomMessage();
+            auto sig = signFor(userId, message, sample.sessionString);
+            if (sig.empty()) {
+                return false;
+            }
+            sample.userIds.push_back(std::move(userId));
+            sample.messages.emplace_back(message.begin(), message.end());
+            sample.signatures.push_back(std::move(sig));
+        }
+        return true;
+    };
+
+    // ── 1. Legal aggregate samples (expect accept / TP) ──
+    for (std::size_t k = 0; k < legalCount; ++k) {
+        IdentityAggregateSample sample;
+        sample.tamperMode = AggregateTamperMode::None;
+        sample.sessionString = makeBenchSessionString();
+        if (fillSample(sample)) {
+            samples.push_back(std::move(sample));
+        }
+    }
+
+    // ── 2. Tampered: one byte flipped inside the aggregate signature (expect reject / TN) ──
+    for (std::size_t k = 0; k < flipByteCount; ++k) {
+        IdentityAggregateSample sample;
+        sample.tamperMode = AggregateTamperMode::FlipByte;
+        sample.sessionString = makeBenchSessionString();
+        if (fillSample(sample)) {
+            samples.push_back(std::move(sample));
+        }
+    }
+
+    // ── 3. Tampered: one signer entry removed from the ONA roster (expect reject / TN) ──
+    for (std::size_t k = 0; k < removeEntryCount; ++k) {
+        IdentityAggregateSample sample;
+        sample.tamperMode = AggregateTamperMode::RemoveEntry;
+        sample.sessionString = makeBenchSessionString();
+        if (fillSample(sample)) {
+            samples.push_back(std::move(sample));
+        }
+    }
+
+    // ── 4. Cross-session mixing: n-1 signers under session 1, last under
+    //       session 2 → aggregateSessionSignatures must reject (counted as
+    //       rejectedAggregation, never a TP/FP) ──
+    for (std::size_t k = 0; k < crossSessionCount; ++k) {
+        IdentityAggregateSample sample;
+        sample.tamperMode = AggregateTamperMode::CrossSession;
+        sample.sessionString = makeBenchSessionString();
+        sample.sessionString2 = makeBenchSessionString();
+        bool ok = true;
+        for (std::size_t i = 0; i + 1 < n; ++i) {
+            auto userId = "user-" + std::to_string(i);
+            auto message = randomMessage();
+            auto sig = signFor(userId, message, sample.sessionString);
+            if (sig.empty()) {
+                ok = false;
+                break;
+            }
+            sample.userIds.push_back(std::move(userId));
+            sample.messages.emplace_back(message.begin(), message.end());
+            sample.signatures.push_back(std::move(sig));
+        }
+        if (ok) {
+            auto userId = "user-" + std::to_string(n - 1);
+            auto message = randomMessage();
+            auto sig = signFor(userId, message, sample.sessionString2);
+            if (sig.empty()) {
+                ok = false;
+            } else {
+                sample.userIds.push_back(std::move(userId));
+                sample.messages.emplace_back(message.begin(), message.end());
+                sample.signatures.push_back(std::move(sig));
+            }
+        }
+        if (ok) {
+            samples.push_back(std::move(sample));
+        }
+    }
+
+    // ── 5. Duplicate signer: same (session, userId) signs twice → the
+    //       aggregation must reject (counted as rejectedAggregation) ──
+    for (std::size_t k = 0; k < duplicateCount; ++k) {
+        IdentityAggregateSample sample;
+        sample.tamperMode = AggregateTamperMode::DuplicateSigner;
+        sample.sessionString = makeBenchSessionString();
+        bool ok = true;
+        // user-0 signs two distinct messages under the same session
+        for (std::size_t dup = 0; dup < 2 && ok; ++dup) {
+            auto userId = "user-0";
+            auto message = randomMessage();
+            auto sig = signFor(userId, message, sample.sessionString);
+            if (sig.empty()) {
+                ok = false;
+                break;
+            }
+            sample.userIds.push_back(std::move(userId));
+            sample.messages.emplace_back(message.begin(), message.end());
+            sample.signatures.push_back(std::move(sig));
+        }
+        // users 1..n-2 sign once → n signatures total with one duplicate
+        for (std::size_t i = 1; i + 1 < n && ok; ++i) {
+            auto userId = "user-" + std::to_string(i);
+            auto message = randomMessage();
+            auto sig = signFor(userId, message, sample.sessionString);
+            if (sig.empty()) {
+                ok = false;
+                break;
+            }
+            sample.userIds.push_back(std::move(userId));
+            sample.messages.emplace_back(message.begin(), message.end());
+            sample.signatures.push_back(std::move(sig));
+        }
+        if (ok) {
+            samples.push_back(std::move(sample));
+        }
+    }
+
+    return samples;
+}
+
+// ==================================================================
+// makeBenchSessionString() — internal session counter (NOT a CLI param)
+// ==================================================================
+
+std::string IdentityVerifyScenario::makeBenchSessionString()
+{
+    return onlineAlgo_->makeSessionString(
+        "bench-" + std::to_string(sessionCounter_++), "IdentityVerify");
 }
 
 // ==================================================================

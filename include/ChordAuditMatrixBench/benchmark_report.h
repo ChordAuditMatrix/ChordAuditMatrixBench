@@ -25,8 +25,8 @@
  *          polymorphic result vector. The legacy static BenchmarkReport class
  *          with ResultKind dispatch has been removed.
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.1.0
+ * @date 2026-08-25
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_REPORT_H

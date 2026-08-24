@@ -24,8 +24,8 @@
  *          called by each concrete scenario's computeResult() to populate the
  *          polymorphic result hierarchy.
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.1.0
+ * @date 2026-08-25
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_METRICS_COLLECTOR_H
@@ -87,6 +87,18 @@ public:
         }
     }
 
+    /**
+     * @brief Record online aggregation rejections from an iteration
+     * @param count Number of aggregation rejections (cross-session mixing /
+     *              duplicate signer) in the iteration
+     * @details Rejected aggregations are counted separately and never enter
+     *          the TP/FP/TN/FN confusion matrix.
+     */
+    void recordRejectedAggregation(std::size_t count)
+    {
+        rejectedAggregation_ += count;
+    }
+
     // ── Setup timings ──
 
     /**
@@ -110,6 +122,7 @@ public:
         signMs_.push_back(timings.signMs);
         verifyMs_.push_back(timings.verifyMs);
         aggregateVerifyMs_.push_back(timings.aggregateVerifyMs);
+        aggregateMs_.push_back(timings.aggregateMs);
         maintainMs_.push_back(timings.maintainMs);
     }
 
@@ -170,6 +183,7 @@ public:
         result.falseAccepts = falseAccepts_;
         result.trueRejects = trueRejects_;
         result.falseRejects = falseRejects_;
+        result.rejectedAggregation = rejectedAggregation_;
         fillCommonMetrics(result, config);
     }
 
@@ -187,6 +201,7 @@ public:
         falseAccepts_ = 0;
         trueRejects_ = 0;
         falseRejects_ = 0;
+        rejectedAggregation_ = 0;
         setupTimings_ = StageTimings{};
         genChallengesMs_.clear();
         genProofsMs_.clear();
@@ -194,6 +209,7 @@ public:
         signMs_.clear();
         verifyMs_.clear();
         aggregateVerifyMs_.clear();
+        aggregateMs_.clear();
         maintainMs_.clear();
         messageSizes_ = MessageSizes{};
         memoryPeakBytes_ = 0;
@@ -210,6 +226,7 @@ private:
     std::size_t falseAccepts_ = 0;
     std::size_t trueRejects_ = 0;
     std::size_t falseRejects_ = 0;
+    std::size_t rejectedAggregation_ = 0;
 
     // ── Setup timings (one-time) ──
     StageTimings setupTimings_;
@@ -221,6 +238,7 @@ private:
     std::vector<double> signMs_;
     std::vector<double> verifyMs_;
     std::vector<double> aggregateVerifyMs_;
+    std::vector<double> aggregateMs_;
     std::vector<double> maintainMs_;
 
     // ── Message sizes ──
@@ -256,6 +274,7 @@ private:
         t.signMs = avg(signMs_);
         t.verifyMs = avg(verifyMs_);
         t.aggregateVerifyMs = avg(aggregateVerifyMs_);
+        t.aggregateMs = avg(aggregateMs_);
         t.maintainMs = avg(maintainMs_);
         return t;
     }
@@ -269,6 +288,7 @@ private:
         t.signMs = minVal(signMs_);
         t.verifyMs = minVal(verifyMs_);
         t.aggregateVerifyMs = minVal(aggregateVerifyMs_);
+        t.aggregateMs = minVal(aggregateMs_);
         t.maintainMs = minVal(maintainMs_);
         return t;
     }
@@ -282,6 +302,7 @@ private:
         t.signMs = maxVal(signMs_);
         t.verifyMs = maxVal(verifyMs_);
         t.aggregateVerifyMs = maxVal(aggregateVerifyMs_);
+        t.aggregateMs = maxVal(aggregateMs_);
         t.maintainMs = maxVal(maintainMs_);
         return t;
     }

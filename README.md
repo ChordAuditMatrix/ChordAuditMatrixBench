@@ -70,6 +70,40 @@ add_subdirectory(3rdparty/ChordAuditMatrixBench EXCLUDE_FROM_ALL)
 --help                      Show help message
 ```
 
+### Online Identity Algorithms (session-coordinated)
+
+Algorithms whose `kind() == Online` (derived from
+`OnlineIdentitySigningAlgorithm`, e.g. `SM9Online`) are driven through the
+session-coordinated path in addition to the offline single-signature path:
+
+- **Session strings** — generated internally per sample via
+  `makeSessionString("bench-" + counter, "IdentityVerify")`; the session id
+  comes from an internal incrementing counter, so **no new CLI parameter** is
+  introduced. Each single-signature sample signs under its own session string
+  (embedded in the `ONS` signature, self-contained at verification time).
+- **Aggregate scenario** — automatically enabled when the algorithm is Online
+  **and** `--num-users >= 2` (the signer count reuses `--num-users`). Each
+  aggregate sample has n = `--num-users` distinct signers signing distinct
+  messages under **one shared session string**, then aggregated via
+  `aggregateSessionSignatures` and verified via `aggregateVerify` (`ONA`).
+- **Sample kinds (per n, equal legal vs tampered counts)**:
+  - Legal aggregate → accept (TP);
+  - Tampered: one byte flipped inside the aggregate signature bytes → reject (TN);
+  - Tampered: one signer entry removed from the `ONA` roster → reject (TN);
+  - Cross-session mixing (signatures from two session strings fed to the
+    aggregator) → aggregation rejected, counted in `rejectedAggregation`
+    (never a TP/FP);
+  - Duplicate signer (same session + userId signs twice) → aggregation
+    rejected, counted in `rejectedAggregation`.
+- **New metrics** — the aggregation stage timing (`aggregateMs`) and the
+  aggregate signature bytes (`aggregateSignatureBytes`, `ONA` roster grows
+  O(n) with the signer count) are collected per iteration and reported
+  alongside the existing four-stage timings; the report also carries
+  `algorithmKind` (`Online`/`Offline`) and `aggregateSigners` (n; 0 when off).
+
+See the design docs (Doc 4: ChordAuditMatrixBenchmark完善文档.md §2/§3) for the
+exact sample construction and accuracy accounting rules.
+
 ## Repository Structure
 
 ```

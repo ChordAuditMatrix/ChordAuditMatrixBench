@@ -24,8 +24,8 @@
  *          Legacy fat structs and ResultKind/ScenarioKind/SweepMode enums have
  *          been removed in favour of an all-polymorphic pipeline.
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.1.0
+ * @date 2026-08-25
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_TYPES_H
@@ -145,6 +145,7 @@ struct StageTimings {
     double signMs = 0;
     double verifyMs = 0;
     double aggregateVerifyMs = 0;
+    double aggregateMs = 0;         ///< Aggregation stage timing (online aggregateSessionSignatures)
 
     // --- Dynamic PDP stages (0 for static PDP) ---
     double maintainMs = 0;
@@ -166,6 +167,7 @@ struct MessageSizes {
     // --- Identity verification (0 for PDP) ---
     std::size_t signatureBytes = 0;
     std::size_t verifyRequestBytes = 0;
+    std::size_t aggregateSignatureBytes = 0; ///< Aggregated signature bytes (ONA record, O(n) in signers)
 };
 
 // ==================================================================
@@ -239,6 +241,10 @@ public:
     std::size_t falseAccepts = 0;         ///< FP
     std::size_t trueRejects = 0;          ///< TN
     std::size_t falseRejects = 0;         ///< FN
+
+    std::string algorithmKind = "Unknown"; ///< "Online" / "Offline" / "Unknown"
+    std::size_t aggregateSigners = 0;     ///< Signers per aggregate sample (n = numUsers; 0 when offline)
+    std::size_t rejectedAggregation = 0;  ///< Aggregation rejections (cross-session mixing / duplicate signer; not in confusion matrix)
 };
 
 } // namespace CAMatrix::Audit::Benchmark

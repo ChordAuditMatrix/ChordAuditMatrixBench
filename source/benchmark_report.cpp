@@ -21,10 +21,13 @@
  * @details Concrete toConsole()/toJson() for PdpDirectReport,
  *          PdpFixedRatioReport, PdpInverseConfidenceReport, IdentityReport.
  *          All fields are read from the typed result pointers extracted by
- *          the PdpReportBase / IdentityReport constructors.
+ *          the PdpReportBase / IdentityReport constructors. IdentityReport
+ *          additionally reports the online tier: algorithmKind, aggregate
+ *          signers n, the aggregation-stage timing (aggregateMs), the
+ *          aggregate signature bytes (ONA record) and rejected aggregations.
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.1.0
+ * @date 2026-08-25
  */
 
 #include <ChordAuditMatrixBench/benchmark_report.h>
@@ -382,12 +385,19 @@ std::string IdentityReport::toConsole() const
 {
     if (identityResults_.empty()) return "(no results)\n";
     std::ostringstream oss;
+    const char* kind = (identityResults_.front())
+        ? identityResults_.front()->algorithmKind.c_str() : "Unknown";
     oss << "\n╔══════════════════════════════════════════════════════════════════╗\n";
     oss << "║     Identity Verification Benchmark Report — " << algorithmType_;
     std::size_t padLen = 19 - algorithmType_.size();
     for (std::size_t i = 0; i < padLen; ++i) oss << ' ';
     oss << "║\n";
     oss << "╚══════════════════════════════════════════════════════════════════╝\n\n";
+
+    oss << "  Algorithm kind: " << kind << "\n";
+    oss << "  Aggregate signers (n): per-row Agg column (online only; 0 = offline)\n";
+    oss << "  Rejected aggregations: cross-session mixing / duplicate signer\n";
+    oss << "                         (online only; not part of the confusion matrix)\n\n";
 
     oss << "Parameter Descriptions:\n";
     oss << "  Users             — Enrolled users\n";
@@ -404,8 +414,10 @@ std::string IdentityReport::toConsole() const
         << std::setw(10) << "FP"
         << std::setw(10) << "TN"
         << std::setw(10) << "FN"
+        << std::setw(6)  << "Agg"
+        << std::setw(8)  << "RejAgg"
         << "\n";
-    oss << std::string(86, '-') << "\n";
+    oss << std::string(100, '-') << "\n";
 
     for (const auto* r : identityResults_) {
         if (!r) continue;
@@ -419,6 +431,8 @@ std::string IdentityReport::toConsole() const
             << std::setw(10) << r->falseAccepts
             << std::setw(10) << r->trueRejects
             << std::setw(10) << r->falseRejects
+            << std::setw(6)  << r->aggregateSigners
+            << std::setw(8)  << r->rejectedAggregation
             << "\n";
     }
 
@@ -435,13 +449,26 @@ std::string IdentityReport::toConsole() const
         oss << "      Sign:             " << r->avgTimings.signMs
             << " / " << r->minTimings.signMs
             << " / " << r->maxTimings.signMs << " ms\n";
+        if (r->avgTimings.aggregateMs > 0 || r->aggregateSigners > 0) {
+            oss << "      Aggregate:        " << r->avgTimings.aggregateMs
+                << " / " << r->minTimings.aggregateMs
+                << " / " << r->maxTimings.aggregateMs << " ms\n";
+        }
         oss << "      Aggregate verify: " << r->avgTimings.aggregateVerifyMs
             << " / " << r->minTimings.aggregateVerifyMs
             << " / " << r->maxTimings.aggregateVerifyMs << " ms\n";
-        if (r->messageSizes.signatureBytes > 0 || r->messageSizes.verifyRequestBytes > 0) {
+        if (r->messageSizes.signatureBytes > 0 || r->messageSizes.verifyRequestBytes > 0
+            || r->messageSizes.aggregateSignatureBytes > 0) {
             oss << "    Message sizes:\n";
             oss << "      Signature:        " << r->messageSizes.signatureBytes << " bytes\n";
             oss << "      Verify request:   " << r->messageSizes.verifyRequestBytes << " bytes\n";
+            if (r->messageSizes.aggregateSignatureBytes > 0) {
+                oss << "      Aggregate sig:    " << r->messageSizes.aggregateSignatureBytes << " bytes\n";
+            }
+        }
+        if (r->rejectedAggregation > 0) {
+            oss << "    Rejected aggregations: " << r->rejectedAggregation
+                << " (cross-session mixing / duplicate signer)\n";
         }
         oss << "    Confusion Matrix:\n";
         oss << "                    Predicted Accept  Predicted Reject\n";
@@ -470,6 +497,9 @@ std::string IdentityReport::toJson() const
         oss << "      \"numUsers\": " << r->numUsers << ",\n";
         oss << "      \"totalVerifySamples\": " << r->totalVerifySamples << ",\n";
         oss << "      \"iterations\": " << r->iterations << ",\n";
+        oss << "      \"algorithmKind\": \"" << r->algorithmKind << "\",\n";
+        oss << "      \"aggregateSigners\": " << r->aggregateSigners << ",\n";
+        oss << "      \"rejectedAggregation\": " << r->rejectedAggregation << ",\n";
         oss << "      \"accuracyRate\": " << std::fixed << std::setprecision(2) << r->accuracyRate << ",\n";
         oss << "      \"trueAccepts\": " << r->trueAccepts << ",\n";
         oss << "      \"falseAccepts\": " << r->falseAccepts << ",\n";
@@ -481,19 +511,23 @@ std::string IdentityReport::toJson() const
         oss << "      },\n";
         oss << "      \"avgTimingsMs\": {\n";
         oss << "        \"sign\": " << r->avgTimings.signMs << ",\n";
+        oss << "        \"aggregate\": " << r->avgTimings.aggregateMs << ",\n";
         oss << "        \"aggregateVerify\": " << r->avgTimings.aggregateVerifyMs << "\n";
         oss << "      },\n";
         oss << "      \"minTimingsMs\": {\n";
         oss << "        \"sign\": " << r->minTimings.signMs << ",\n";
+        oss << "        \"aggregate\": " << r->minTimings.aggregateMs << ",\n";
         oss << "        \"aggregateVerify\": " << r->minTimings.aggregateVerifyMs << "\n";
         oss << "      },\n";
         oss << "      \"maxTimingsMs\": {\n";
         oss << "        \"sign\": " << r->maxTimings.signMs << ",\n";
+        oss << "        \"aggregate\": " << r->maxTimings.aggregateMs << ",\n";
         oss << "        \"aggregateVerify\": " << r->maxTimings.aggregateVerifyMs << "\n";
         oss << "      },\n";
         oss << "      \"messageSizes\": {\n";
         oss << "        \"signatureBytes\": " << r->messageSizes.signatureBytes << ",\n";
-        oss << "        \"verifyRequestBytes\": " << r->messageSizes.verifyRequestBytes << "\n";
+        oss << "        \"verifyRequestBytes\": " << r->messageSizes.verifyRequestBytes << ",\n";
+        oss << "        \"aggregateSignatureBytes\": " << r->messageSizes.aggregateSignatureBytes << "\n";
         oss << "      },\n";
         oss << "      \"memoryPeakBytes\": " << r->memoryPeakBytes << "\n";
         oss << "    }";
