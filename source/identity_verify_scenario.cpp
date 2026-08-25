@@ -225,12 +225,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     auto signMs = measureMs([&] {
         ctx_.testSamples = generateTestSamples(cfg);
     });
-    // signMs reports the per-owner credential-generation time (single-signature
-    // samples only). Aggregate-sample signing is identical per-owner work
-    // repeated n times (scaffolding), so it is intentionally excluded from
-    // the per-call timing average.
-    ctx_.setupTimings.signMs = singleSignMs;
-    (void)aggregateSampleMs;
+    ctx_.setupTimings.signMs = signMs;
 }
 
 // ==================================================================
