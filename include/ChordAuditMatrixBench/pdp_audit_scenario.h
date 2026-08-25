@@ -83,23 +83,23 @@ namespace CAMatrix::Audit::Benchmark {
  *          For dynamic PDP, also holds the StateStore and stale version info.
  */
 struct PdpScenarioContext {
-    std::shared_ptr<CAMatrix::Audit::Core::AuditEngine> engine;  ///< Audit engine instance
-    std::unique_ptr<CAMatrix::Audit::Core::AuditOperationContext> opCtx;  ///< Setup-stage operation context
+    std::shared_ptr<CAMatrix::Audit::Core::AuditEngine> engine; /**< Audit engine instance */
+    std::unique_ptr<CAMatrix::Audit::Core::AuditOperationContext> opCtx; /**< Setup-stage operation context */
 
-    CAMatrix::Audit::Data::AuditBlockSourcePtr originalBlocks;    ///< Original (uncorrupted) block source
-    CAMatrix::Audit::Data::AuditBlockSourcePtr corruptedBlocks;   ///< Corrupted block source (after corruptBlocks())
-    CAMatrix::Audit::Messages::TagsPtr tags;                      ///< Generated tags from setup
+    CAMatrix::Audit::Data::AuditBlockSourcePtr originalBlocks; /**< Original (uncorrupted) block source */
+    CAMatrix::Audit::Data::AuditBlockSourcePtr corruptedBlocks; /**< Corrupted block source (after corruptBlocks()) */
+    CAMatrix::Audit::Messages::TagsPtr tags; /**< Generated tags from setup */
 
-    std::vector<std::size_t> corruptedIndices;  ///< Indices of corrupted blocks
-    std::string userId;                         ///< User identifier for audit operations
-    std::string fileId;                         ///< File identifier for audit operations
+    std::vector<std::size_t> corruptedIndices; /**< Indices of corrupted blocks */
+    std::string userId; /**< User identifier for audit operations */
+    std::string fileId; /**< File identifier for audit operations */
 
-    StageTimings setupTimings;  ///< One-time setup stage timings
+    StageTimings setupTimings; /**< One-time setup stage timings */
 
     // --- Dynamic PDP state ---
-    CAMatrix::Audit::Core::StrategyKind strategyKind;  ///< Cached strategy kind for O(1) dispatch
-    std::shared_ptr<CAMatrix::Audit::Core::DynamicPdpStateStore> stateStore;  ///< StateStore for dynamic PDP (owned by scenario)
-    std::vector<std::size_t> staleIndices;             ///< Indices of blocks with stale versions (dynamic PDP)
+    CAMatrix::Audit::Core::StrategyKind strategyKind; /**< Cached strategy kind for O(1) dispatch */
+    std::shared_ptr<CAMatrix::Audit::Core::DynamicPdpStateStore> stateStore; /**< StateStore for dynamic PDP (owned by scenario) */
+    std::vector<std::size_t> staleIndices; /**< Indices of blocks with stale versions (dynamic PDP) */
 };;
 
 /**
@@ -147,19 +147,37 @@ public:
 
     // ── BenchmarkScenario interface ──
 
+    /// @brief Returns the algorithm type identifier
+    /// @return Algorithm type string
     std::string algorithmType() const override;
+    /// @brief One-time setup: init engine, generate keys/tags, build block source
+    /// @param config PDP benchmark configuration
     void setup(const BenchmarkConfig& config) override;
     /// @brief PDP: extracts corruptedBlocks from config and calls prepareCorruption()
+    /// @param config PDP benchmark configuration
     void prepare(const BenchmarkConfig& config) override;
+    /// @brief Run one PDP iteration: genChallenges → genProofs → verifyProofs
+    /// @return true if the iteration completed successfully, false otherwise
     bool runIteration() override;
     /// @brief PDP: records lastDetected_ into the collector
+    /// @param collector MetricsCollector to record into
     void recordIteration(MetricsCollector& collector) override;
     /// @brief Returns a PdpAuditResult populated via MetricsCollector::fillPdpResult()
+    /// @param collector Aggregated metrics
+    /// @param config PDP benchmark configuration
+    /// @return Polymorphic PDP result pointer
     std::unique_ptr<BenchmarkResult> computeResult(
         const MetricsCollector& collector, const BenchmarkConfig& config) override;
+    /// @brief Returns setup stage timings
+    /// @return Setup-stage timings
     StageTimings getSetupTimings() const override;
+    /// @brief Returns timings from the most recent runIteration()
+    /// @return Per-stage timings from the last iteration
     StageTimings getLastTimings() const override;
+    /// @brief Returns message sizes from the most recent runIteration()
+    /// @return Message sizes from the last iteration
     MessageSizes getLastMessageSizes() const override;
+    /// @brief Release all held engine/data resources
     void teardown() override;
 
     // ── PDP-specific methods (still public for advanced/test use) ──

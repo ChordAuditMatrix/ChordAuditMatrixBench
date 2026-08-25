@@ -48,23 +48,29 @@ class Report {
 public:
     virtual ~Report() = default;
     /// @brief Human-readable console output
+    /// @return Formatted console string
     virtual std::string toConsole() const = 0;
     /// @brief Machine-readable JSON output
+    /// @return JSON string
     virtual std::string toJson() const = 0;
 };
 
 // Forward declaration of the strategy factory's result vector alias
 using ResultVec = std::vector<std::unique_ptr<BenchmarkResult>>;
-
 /**
  * @class PdpReportBase
  * @brief Shared base for PDP reports — extracts PdpAuditResult* from results
  */
 class PdpReportBase : public Report {
 protected:
-    std::vector<const PdpAuditResult*> pdpResults_;
-    std::string algorithmType_;
+    std::vector<const PdpAuditResult*> pdpResults_; /**< Downcast PDP result pointers extracted from results */
+    std::string algorithmType_; /**< Algorithm type label for the report */
 public:
+    /**
+     * @brief Construct a PDP report base, extracting PdpAuditResult pointers
+     * @param results Polymorphic result vector from the benchmark run
+     * @param algorithmType Algorithm type label to attach to the report
+     */
     PdpReportBase(const ResultVec& results, const std::string& algorithmType)
         : algorithmType_(algorithmType)
     {
@@ -79,9 +85,12 @@ public:
  * @brief Report for the PdpDirect strategy (fixed N, scan t/r)
  */
 class PdpDirectReport : public PdpReportBase {
-public:
     using PdpReportBase::PdpReportBase;
+    /// @brief Render the PdpDirect report to the console
+    /// @return Human-readable console string
     std::string toConsole() const override;
+    /// @brief Render the PdpDirect report as JSON
+    /// @return JSON string
     std::string toJson() const override;
 };
 
@@ -92,7 +101,11 @@ public:
 class PdpFixedRatioReport : public PdpReportBase {
 public:
     using PdpReportBase::PdpReportBase;
+    /// @brief Render the PdpFixedRatio report to the console
+    /// @return Human-readable console string
     std::string toConsole() const override;
+    /// @brief Render the PdpFixedRatio report as JSON
+    /// @return JSON string
     std::string toJson() const override;
 };
 
@@ -103,7 +116,11 @@ public:
 class PdpInverseConfidenceReport : public PdpReportBase {
 public:
     using PdpReportBase::PdpReportBase;
+    /// @brief Render the PdpInverseConfidence report to the console
+    /// @return Human-readable console string
     std::string toConsole() const override;
+    /// @brief Render the PdpInverseConfidence report as JSON
+    /// @return JSON string
     std::string toJson() const override;
 };
 
@@ -112,9 +129,14 @@ public:
  * @brief Report for the IdentityVerify strategy
  */
 class IdentityReport : public Report {
-    std::vector<const IdentityResult*> identityResults_;
-    std::string algorithmType_;
+    std::vector<const IdentityResult*> identityResults_; /**< Downcast identity result pointers extracted from results */
+    std::string algorithmType_; /**< Algorithm type label for the report */
 public:
+    /**
+     * @brief Construct an identity report, extracting IdentityResult pointers
+     * @param results Polymorphic result vector from the benchmark run
+     * @param algorithmType Algorithm type label to attach to the report
+     */
     IdentityReport(const ResultVec& results, const std::string& algorithmType)
         : algorithmType_(algorithmType)
     {
@@ -122,7 +144,11 @@ public:
         for (const auto& r : results)
             identityResults_.push_back(dynamic_cast<const IdentityResult*>(r.get()));
     }
+    /// @brief Render the identity report to the console
+    /// @return Human-readable console string
     std::string toConsole() const override;
+    /// @brief Render the identity report as JSON
+    /// @return JSON string
     std::string toJson() const override;
 };
 

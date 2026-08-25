@@ -48,9 +48,9 @@ namespace CAMatrix::Audit::Benchmark {
  * @brief Strategy for generating a sequence of sweep sample points
  */
 enum class SweepGen : std::uint8_t {
-    Explicit,   ///< Use the explicitly provided values list
-    Linear,     ///< v = start, start+step, ... <= end
-    Geometric   ///< v = start, start*ratio, ... <= end
+    Explicit, /**< Use the explicitly provided values list */
+    Linear, /**< v = start, start+step, ... <= end */
+    Geometric /**< v = start, start*ratio, ... <= end */
 };
 
 /**
@@ -58,12 +58,12 @@ enum class SweepGen : std::uint8_t {
  * @brief Specification for generating a 1-D sweep sequence
  */
 struct SeqSpec {
-    SweepGen gen = SweepGen::Explicit;
-    std::size_t start = 0;
-    std::size_t end = 0;
-    std::size_t step = 0;
-    double ratio = 2.0;
-    std::size_t maxPoints = 1000;
+    SweepGen gen = SweepGen::Explicit; /**< Generation strategy (explicit list / linear / geometric) */
+    std::size_t start = 0; /**< Sequence start (inclusive) — Linear/Geometric modes */
+    std::size_t end = 0; /**< Sequence end (inclusive) — Linear/Geometric modes */
+    std::size_t step = 0; /**< Step size — Linear mode (must be > 0) */
+    double ratio = 2.0; /**< Growth ratio — Geometric mode (must be > 1.0) */
+    std::size_t maxPoints = 1000; /**< Upper cap on generated points */
 };
 
 // ==================================================================
@@ -75,9 +75,9 @@ struct SeqSpec {
  * @brief Configuration for negative sample generation in identity verification
  */
 struct NegativeSampleConfig {
-    double forgeryRatio = 0.25;
-    double tamperedRatio = 0.25;
-    double impersonationRatio = 0.25;
+    double forgeryRatio = 0.25; /**< Fraction of samples with fully forged signatures */
+    double tamperedRatio = 0.25; /**< Fraction of samples with tampered message content */
+    double impersonationRatio = 0.25; /**< Fraction of samples signed by an impersonating identity */
     // Positive ratio = 1.0 - sum(above)
 };
 
@@ -95,9 +95,9 @@ class BenchmarkConfig {
 public:
     virtual ~BenchmarkConfig() = default;
 
-    std::size_t iterations = 100;       ///< Number of iterations — Runner loop
-    bool usePseudoRandom = false;       ///< PRNG switch — read by all Scenario::setup()
-    std::uint64_t seed = 0;             ///< PRNG seed — read by all Scenario::setup()
+    std::size_t iterations = 100; /**< Number of iterations — Runner loop */
+    bool usePseudoRandom = false; /**< PRNG switch — read by all Scenario::setup() */
+    std::uint64_t seed = 0; /**< PRNG seed — read by all Scenario::setup() */
 };
 
 /**
@@ -106,11 +106,11 @@ public:
  */
 class PdpAuditConfig : public BenchmarkConfig {
 public:
-    std::size_t totalBlocks = 1000;     ///< N — setup() generates data blocks
-    std::size_t corruptedBlocks = 10;   ///< t — prepareCorruption()
-    std::size_t sampleSize = 50;        ///< r — runIteration() challenge count
-    std::size_t blockSize = 256;        ///< Data block size in bytes — setup()
-    std::size_t maintenanceOps = 0;     ///< Dynamic PDP maintenance ops — setup()
+    std::size_t totalBlocks = 1000; /**< N — setup() generates data blocks */
+    std::size_t corruptedBlocks = 10; /**< t — prepareCorruption() */
+    std::size_t sampleSize = 50; /**< r — runIteration() challenge count */
+    std::size_t blockSize = 256; /**< Data block size in bytes — setup() */
+    std::size_t maintenanceOps = 0; /**< Dynamic PDP maintenance ops — setup() */
 };
 
 /**
@@ -119,9 +119,9 @@ public:
  */
 class IdentityConfig : public BenchmarkConfig {
 public:
-    std::size_t numUsers = 10;                   ///< User count — setup() derives keys
-    std::size_t samplesPerIteration = 100;       ///< Samples per iteration — generateTestSamples()
-    NegativeSampleConfig negativeSamples;        ///< Negative sample config
+    std::size_t numUsers = 10; /**< User count — setup() derives keys */
+    std::size_t samplesPerIteration = 100; /**< Samples per iteration — generateTestSamples() */
+    NegativeSampleConfig negativeSamples; /**< Negative sample config */
 };
 
 // ==================================================================
@@ -134,20 +134,20 @@ public:
  */
 struct StageTimings {
     // --- PDP audit stages ---
-    double initAlgoMs = 0;
-    double genKeysMs = 0;
-    double genTagsMs = 0;
-    double genChallengesMs = 0;
-    double genProofsMs = 0;
-    double verifyProofsMs = 0;
+    double initAlgoMs = 0; /**< Algorithm initialization time */
+    double genKeysMs = 0; /**< Key generation time */
+    double genTagsMs = 0; /**< Tag generation time */
+    double genChallengesMs = 0; /**< Challenge generation time */
+    double genProofsMs = 0; /**< Proof generation time */
+    double verifyProofsMs = 0; /**< Proof verification time */
 
     // --- Identity verification stages (0 for PDP) ---
-    double signMs = 0;
-    double verifyMs = 0;
-    double aggregateVerifyMs = 0;
+    double signMs = 0; /**< Individual signing time */
+    double verifyMs = 0; /**< Individual verification time */
+    double aggregateVerifyMs = 0; /**< Aggregate verification time */
 
     // --- Dynamic PDP stages (0 for static PDP) ---
-    double maintainMs = 0;
+    double maintainMs = 0; /**< Dynamic PDP maintenance (Update/Insert/Delete) time */
 };
 
 // ==================================================================
@@ -160,12 +160,12 @@ struct StageTimings {
  */
 struct MessageSizes {
     // --- PDP audit ---
-    std::size_t challengeBytes = 0;
-    std::size_t proofBytes = 0;
+    std::size_t challengeBytes = 0; /**< Serialized challenge message size */
+    std::size_t proofBytes = 0; /**< Serialized proof message size */
 
     // --- Identity verification (0 for PDP) ---
-    std::size_t signatureBytes = 0;
-    std::size_t verifyRequestBytes = 0;
+    std::size_t signatureBytes = 0; /**< Serialized signature message size */
+    std::size_t verifyRequestBytes = 0; /**< Serialized verify-request message size */
 };
 
 // ==================================================================
@@ -177,10 +177,10 @@ struct MessageSizes {
  * @brief Result of a single audit iteration
  */
 struct AuditOutcome {
-    bool detected = false;
-    std::string reason;
-    StageTimings timings;
-    MessageSizes messageSizes;
+    bool detected = false; /**< Whether corruption/incompleteness was detected */
+    std::string reason; /**< Human-readable detection reason */
+    StageTimings timings; /**< Per-stage timings for this iteration */
+    MessageSizes messageSizes; /**< Serialized message sizes for this iteration */
 };
 
 // ==================================================================
@@ -197,16 +197,16 @@ class BenchmarkResult {
 public:
     virtual ~BenchmarkResult() = default;
 
-    std::string algorithmType;            ///< Algorithm identifier
-    std::size_t iterations = 0;           ///< Iterations performed
+    std::string algorithmType; /**< Algorithm identifier */
+    std::size_t iterations = 0; /**< Iterations performed */
 
-    StageTimings setupTimings;            ///< Setup-phase timings
-    StageTimings avgTimings;              ///< Average per-iteration timings
-    StageTimings minTimings;              ///< Minimum per-iteration timings
-    StageTimings maxTimings;              ///< Maximum per-iteration timings
+    StageTimings setupTimings; /**< Setup-phase timings */
+    StageTimings avgTimings; /**< Average per-iteration timings */
+    StageTimings minTimings; /**< Minimum per-iteration timings */
+    StageTimings maxTimings; /**< Maximum per-iteration timings */
 
-    std::size_t memoryPeakBytes = 0;      ///< Peak memory usage
-    MessageSizes messageSizes;            ///< Serialized message sizes
+    std::size_t memoryPeakBytes = 0; /**< Peak memory usage */
+    MessageSizes messageSizes; /**< Serialized message sizes */
 };
 
 /**
@@ -215,14 +215,14 @@ public:
  */
 class PdpAuditResult : public BenchmarkResult {
 public:
-    std::size_t totalBlocks = 0;          ///< N
-    std::size_t corruptedBlocks = 0;      ///< t
-    std::size_t sampleSize = 0;           ///< r
-    std::size_t maintenanceOps = 0;       ///< Dynamic PDP maintenance ops
+    std::size_t totalBlocks = 0; /**< N */
+    std::size_t corruptedBlocks = 0; /**< t */
+    std::size_t sampleSize = 0; /**< r */
+    std::size_t maintenanceOps = 0; /**< Dynamic PDP maintenance ops */
 
-    std::size_t detections = 0;           ///< Iterations that detected corruption
-    double confidenceRate = 0;            ///< Empirical = detections / iterations
-    double theoreticalConfidenceRate = 0; ///< Hypergeometric theoretical rate
+    std::size_t detections = 0; /**< Iterations that detected corruption */
+    double confidenceRate = 0; /**< Empirical = detections / iterations */
+    double theoreticalConfidenceRate = 0; /**< Hypergeometric theoretical rate */
 };
 
 /**
@@ -231,14 +231,14 @@ public:
  */
 class IdentityResult : public BenchmarkResult {
 public:
-    std::size_t numUsers = 0;
-    std::size_t totalVerifySamples = 0;
-    double accuracyRate = 0;              ///< (TP + TN) / total
+    std::size_t numUsers = 0; /**< Number of users in the identity set */
+    std::size_t totalVerifySamples = 0; /**< Total samples verified across iterations */
+    double accuracyRate = 0; /**< (TP + TN) / total */
 
-    std::size_t trueAccepts = 0;          ///< TP
-    std::size_t falseAccepts = 0;         ///< FP
-    std::size_t trueRejects = 0;          ///< TN
-    std::size_t falseRejects = 0;         ///< FN
+    std::size_t trueAccepts = 0; /**< TP */
+    std::size_t falseAccepts = 0; /**< FP */
+    std::size_t trueRejects = 0; /**< TN */
+    std::size_t falseRejects = 0; /**< FN */
 };
 
 } // namespace CAMatrix::Audit::Benchmark
