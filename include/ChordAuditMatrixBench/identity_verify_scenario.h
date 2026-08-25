@@ -124,6 +124,9 @@ struct IdentityScenarioContext {
     /** @brief User key map: userId → (publicKey, privateKey) */
     std::unordered_map<std::string, UserKeys> userKeys;
 
+    /** @brief Serialized user private key bytes (KeyGen stage communication; measured at setup) */
+    std::size_t userKeyBytes = 0;
+
     /** @brief Labeled test sample set (positive + negative) */
     std::vector<IdentitySampleLabel> testSamples;
 

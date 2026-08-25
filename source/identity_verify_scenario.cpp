@@ -217,6 +217,11 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
             auto [uPub, uPriv] = ctx_.manager->getIdentityAlgorithm(algorithmType_)->deriveUserKey(
                 *ctx_.masterPub, *ctx_.masterPriv, userId);
             ctx_.userKeys[userId] = {uPub, uPriv};
+            // KeyGen stage communication: serialized user private key bytes
+            // (KGC issues one private key per user over a secure channel).
+            if (ctx_.userKeyBytes == 0 && uPriv) {
+                ctx_.userKeyBytes = uPriv->serialize().size();
+            }
         }
     });
     ctx_.setupTimings.genKeysMs = genKeysMs;
@@ -335,7 +340,6 @@ bool IdentityVerifyScenario::runIteration()
     lastTimings_ = StageTimings{};
     lastTimings_.signMs = (sampleCount > 0 && config_.numUsers > 0)
         ? ctx_.setupTimings.signMs / (sampleCount * config_.numUsers) : 0;
-    lastTimings_.verifyMs = (sampleCount > 0) ? totalVerifyMs / sampleCount : 0;
     lastTimings_.aggregateVerifyMs =
         (sampleCount > 0) ? totalVerifyMs / sampleCount : 0;
     lastTimings_.aggregateMs =
@@ -343,6 +347,7 @@ bool IdentityVerifyScenario::runIteration()
 
     // ── Record message sizes (average per individual signature) ──
     lastMessageSizes_ = MessageSizes{};
+    lastMessageSizes_.userKeyBytes = ctx_.userKeyBytes;
     lastMessageSizes_.signatureBytes =
         (totalSignatureCount > 0) ? totalSignatureBytes / totalSignatureCount : 0;
     lastMessageSizes_.verifyRequestBytes =

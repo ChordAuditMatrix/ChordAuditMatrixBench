@@ -512,6 +512,7 @@ std::string IdentityReport::toJson() const
         oss << "        \"aggregateVerify\": " << r->maxTimings.aggregateVerifyMs << "\n";
         oss << "      },\n";
         oss << "      \"messageSizes\": {\n";
+        oss << "        \"userKeyBytes\": " << r->messageSizes.userKeyBytes << ",\n";
         oss << "        \"signatureBytes\": " << r->messageSizes.signatureBytes << ",\n";
         oss << "        \"verifyRequestBytes\": " << r->messageSizes.verifyRequestBytes << ",\n";
         oss << "        \"aggregateSignatureBytes\": " << r->messageSizes.aggregateSignatureBytes << "\n";

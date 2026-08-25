@@ -111,7 +111,6 @@ public:
         genProofsMs_.push_back(timings.genProofsMs);
         verifyProofsMs_.push_back(timings.verifyProofsMs);
         signMs_.push_back(timings.signMs);
-        verifyMs_.push_back(timings.verifyMs);
         aggregateVerifyMs_.push_back(timings.aggregateVerifyMs);
         aggregateMs_.push_back(timings.aggregateMs);
         maintainMs_.push_back(timings.maintainMs);
@@ -200,7 +199,6 @@ public:
         genProofsMs_.clear();
         verifyProofsMs_.clear();
         signMs_.clear();
-        verifyMs_.clear();
         aggregateVerifyMs_.clear();
         aggregateMs_.clear();
         maintainMs_.clear();
@@ -228,7 +226,6 @@ private:
     std::vector<double> genProofsMs_; /**< Per-iteration proof-generation times */
     std::vector<double> verifyProofsMs_; /**< Per-iteration proof-verification times */
     std::vector<double> signMs_; /**< Per-iteration individual signing times */
-    std::vector<double> verifyMs_; /**< Per-iteration individual verification times */
     std::vector<double> aggregateVerifyMs_; /**< Per-iteration aggregate-verification times */
     std::vector<double> aggregateMs_; /**< Per-iteration aggregation times (online aggregateSessionSignatures) */
     std::vector<double> maintainMs_; /**< Per-iteration dynamic-PDP maintenance times */
@@ -264,7 +261,6 @@ private:
         t.genProofsMs = avg(genProofsMs_);
         t.verifyProofsMs = avg(verifyProofsMs_);
         t.signMs = avg(signMs_);
-        t.verifyMs = avg(verifyMs_);
         t.aggregateVerifyMs = avg(aggregateVerifyMs_);
         t.aggregateMs = avg(aggregateMs_);
         t.maintainMs = avg(maintainMs_);
@@ -278,7 +274,6 @@ private:
         t.genProofsMs = minVal(genProofsMs_);
         t.verifyProofsMs = minVal(verifyProofsMs_);
         t.signMs = minVal(signMs_);
-        t.verifyMs = minVal(verifyMs_);
         t.aggregateVerifyMs = minVal(aggregateVerifyMs_);
         t.aggregateMs = minVal(aggregateMs_);
         t.maintainMs = minVal(maintainMs_);
@@ -292,7 +287,6 @@ private:
         t.genProofsMs = maxVal(genProofsMs_);
         t.verifyProofsMs = maxVal(verifyProofsMs_);
         t.signMs = maxVal(signMs_);
-        t.verifyMs = maxVal(verifyMs_);
         t.aggregateVerifyMs = maxVal(aggregateVerifyMs_);
         t.aggregateMs = maxVal(aggregateMs_);
         t.maintainMs = maxVal(maintainMs_);
