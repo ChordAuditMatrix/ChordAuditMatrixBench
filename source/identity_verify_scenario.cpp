@@ -68,6 +68,66 @@ double measureMs(F&& f)
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
+/**
+ * @brief Sign a message with a user's private key → σᵢ (raw bytes)
+ * @param userId User whose private key signs
+ * @param message Message (CryptoArray) to sign
+ * @param ctx Scenario context (manager + master key + user keys)
+ * @param algorithmType Identity algorithm type
+ * @return Raw signature bytes
+ */
+CAMatrix::Crypto::CryptoArray signForUser(
+    const std::string& userId,
+    const CAMatrix::Crypto::CryptoArray& message,
+    const IdentityScenarioContext& ctx,
+    const std::string& algorithmType)
+{
+    auto it = ctx.userKeys.find(userId);
+    if (it == ctx.userKeys.end()) {
+        throw std::invalid_argument("signForUser: unknown user " + userId);
+    }
+
+    CAMatrix::Audit::Messages::AuditDataMap signInput;
+    signInput.emplace("message", message);
+    signInput.emplace("userId", userId);
+    signInput.emplace("masterPub", ctx.masterPub);
+    signInput.emplace("userPriv", it->second.priv);
+
+    auto algo = ctx.manager->getIdentityAlgorithm(algorithmType);
+    auto variant = algo->createRequest(
+        CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
+    auto req = std::get<std::shared_ptr<
+        CAMatrix::Identity::Core::SignRequest>>(*variant);
+    return algo->sign(*req);
+}
+
+/**
+ * @brief Fill a sample with numUsers legitimate signatures over the same message
+ * @param sample Sample to fill
+ * @param message Message (CryptoArray) all signers sign
+ * @param ctx Scenario context
+ * @param algorithmType Identity algorithm type
+ * @param numUsers Number of signers (user-0 .. user-(numUsers-1))
+ */
+void fillLegitSigners(IdentitySampleLabel& sample,
+                      const CAMatrix::Crypto::CryptoArray& message,
+                      const IdentityScenarioContext& ctx,
+                      const std::string& algorithmType,
+                      std::size_t numUsers)
+{
+    for (std::size_t j = 0; j < numUsers; ++j) {
+        auto userId = "user-" + std::to_string(j);
+        auto it = ctx.userKeys.find(userId);
+        if (it == ctx.userKeys.end()) {
+            continue;
+        }
+
+        sample.signatures.push_back(signForUser(userId, message, ctx, algorithmType));
+        sample.userIds.push_back(userId);
+        sample.userPubKeys.push_back(it->second.pub);
+    }
+}
+
 } // anonymous namespace
 
 // ==================================================================
@@ -138,31 +198,51 @@ bool IdentityVerifyScenario::runIteration()
     using AuditDataMap = CAMatrix::Audit::Messages::AuditDataMap;
 
     lastTA_ = lastFA_ = lastTR_ = lastFR_ = 0;
-    double totalSignMs = 0;
     double totalVerifyMs = 0;
     std::size_t totalSignatureBytes = 0;
     std::size_t totalVerifyRequestBytes = 0;
+    std::size_t totalSignatureCount = 0;
 
     for (const auto& sample : ctx_.testSamples) {
-        // ── Construct AuditDataMap for aggregateVerify ──
-        AuditDataMap verifyInput;
-        verifyInput.emplace("aggregateSignature", sample.signature);
-        verifyInput.emplace("message", CAMatrix::Crypto::CryptoArray(sample.message.begin(), sample.message.end()));
-        verifyInput.emplace("masterPub", ctx_.masterPub);
+        CAMatrix::Crypto::CryptoArray msgBytes(sample.message.begin(), sample.message.end());
 
-        // Build signers list: single signer
-        std::vector<std::string> userIds = {sample.userId};
-        auto it = ctx_.userKeys.find(sample.userId);
-        std::vector<std::shared_ptr<
-            CAMatrix::Identity::Core::AlgoUserPublicParams>> userPubKeys;
-        if (it != ctx_.userKeys.end()) {
-            userPubKeys.push_back(it->second.pub);
-        }
-        verifyInput.emplace("userIds", userIds);
-        verifyInput.emplace("userPubKeys", userPubKeys);
+        // ── 1. Aggregate individual signatures → Σ ──
+        AuditDataMap aggInput;
+        aggInput.emplace("message", msgBytes);
+        aggInput.emplace("signatures", sample.signatures);
+        aggInput.emplace("userIds", sample.userIds);
+        aggInput.emplace("userPubKeys", sample.userPubKeys);
+        aggInput.emplace("masterPub", ctx_.masterPub);
 
-        // ── Measure verification time ──
+        CAMatrix::Crypto::CryptoArray aggSig;
         bool accepted = false;
+        try {
+            auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+            auto aggVariant = algo->createRequest(
+                CAMatrix::Identity::Core::IdentityOperation::Aggregate, aggInput);
+            auto aggReq = std::get<std::shared_ptr<
+                CAMatrix::Identity::Core::AggregateRequest>>(*aggVariant);
+            aggSig = algo->aggregate(*aggReq);
+        } catch (...) {
+            // Aggregate failed → verification fails
+            if (!sample.shouldAccept) ++lastTR_;
+            else ++lastFR_;
+            continue;
+        }
+        if (aggSig.empty()) {
+            if (!sample.shouldAccept) ++lastTR_;
+            else ++lastFR_;
+            continue;
+        }
+
+        // ── 2. Aggregate-verify Σ against all signers ──
+        AuditDataMap verifyInput;
+        verifyInput.emplace("aggregateSignature", aggSig);
+        verifyInput.emplace("message", msgBytes);
+        verifyInput.emplace("masterPub", ctx_.masterPub);
+        verifyInput.emplace("userIds", sample.userIds);
+        verifyInput.emplace("userPubKeys", sample.userPubKeys);
+
         auto verifyMs = measureMs([&] {
             auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
             auto variant = algo->createRequest(
@@ -173,10 +253,13 @@ bool IdentityVerifyScenario::runIteration()
         });
         totalVerifyMs += verifyMs;
 
-        // ── Accumulate message sizes ──
-        totalSignatureBytes += sample.signature.size();
-        totalVerifyRequestBytes +=
-            sample.signature.size() + sample.message.size() + sample.userId.size();
+        // ── Accumulate message sizes (per-signature averages) ──
+        for (std::size_t k = 0; k < sample.signatures.size(); ++k) {
+            totalSignatureBytes += sample.signatures[k].size();
+            totalVerifyRequestBytes +=
+                sample.signatures[k].size() + sample.message.size() + sample.userIds[k].size();
+        }
+        totalSignatureCount += sample.signatures.size();
 
         // ── Count TP/FP/TN/FN ──
         if (sample.shouldAccept && accepted) {
@@ -204,12 +287,12 @@ bool IdentityVerifyScenario::runIteration()
     lastTimings_.verifyMs = (sampleCount > 0) ? totalVerifyMs / sampleCount : 0;
     lastTimings_.aggregateVerifyMs = totalVerifyMs;
 
-    // ── Record message sizes (average per sample) ──
+    // ── Record message sizes (average per individual signature) ──
     lastMessageSizes_ = MessageSizes{};
     lastMessageSizes_.signatureBytes =
-        (sampleCount > 0) ? totalSignatureBytes / sampleCount : 0;
+        (totalSignatureCount > 0) ? totalSignatureBytes / totalSignatureCount : 0;
     lastMessageSizes_.verifyRequestBytes =
-        (sampleCount > 0) ? totalVerifyRequestBytes / sampleCount : 0;
+        (totalSignatureCount > 0) ? totalVerifyRequestBytes / totalSignatureCount : 0;
 
     return true;
 }
@@ -294,146 +377,180 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
         1.0 - neg.forgeryRatio - neg.tamperedRatio - neg.impersonationRatio;
     std::size_t totalSamples = config.samplesPerIteration;
 
-    // ── 1. Positive samples: legitimate signatures ──
+    // ── 1. Positive samples: numUsers users sign the same message → aggregate ──
     std::size_t posCount = static_cast<std::size_t>(
         static_cast<double>(totalSamples) * positiveRatio);
     for (std::size_t i = 0; i < posCount; ++i) {
-        auto userId = randomUserId(config.numUsers);
         auto message = randomMessage();
-        auto it = ctx_.userKeys.find(userId);
-        if (it == ctx_.userKeys.end()) {
-            continue; // skip if user not found (shouldn't happen)
+        CAMatrix::Crypto::CryptoArray msgBytes(message.begin(), message.end());
+
+        IdentitySampleLabel sample;
+        sample.message = message;
+        sample.shouldAccept = true;
+
+        fillLegitSigners(sample, msgBytes, ctx_, algorithmType_, config.numUsers);
+        if (sample.signatures.size() == config.numUsers) {
+            samples.push_back(std::move(sample));
         }
-
-        // Sign with the correct user's private key
-        AuditDataMap signInput;
-        signInput.emplace("message", CAMatrix::Crypto::CryptoArray(message.begin(), message.end()));
-        signInput.emplace("userId", userId);
-        signInput.emplace("masterPub", ctx_.masterPub);
-        signInput.emplace("userPriv", it->second.priv);
-
-        CAMatrix::Crypto::CryptoArray signature;
-        try {
-            auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
-            auto variant = algo->createRequest(
-                CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
-            auto req = std::get<std::shared_ptr<
-                CAMatrix::Identity::Core::SignRequest>>(*variant);
-            auto sigRaw = algo->sign(*req);
-            signature = std::move(sigRaw);
-        } catch (...) {
-            continue; // skip on signing failure
-        }
-
-        samples.push_back({message, std::move(signature), userId, true});
     }
 
-    // ── 2. Forgery samples: signed by a different user ──
+    // ── 2. Forgery samples: aggregate with one forged signature → reject ──
     std::size_t forgeryCount = static_cast<std::size_t>(
         static_cast<double>(totalSamples) * neg.forgeryRatio);
+
+    // External attacker key pair — NOT registered in the user pool.
+    // Derived once per generateTestSamples call (SM9 key derivation is
+    // expensive); the forged signature must fail against the claimed
+    // victim's public key.
+    std::shared_ptr<CAMatrix::Identity::Core::AlgoUserPrivateParams> forgerPriv;
+    if (forgeryCount > 0 && config.numUsers >= 2) {
+        try {
+            auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+            auto forgerKeys = algo->deriveUserKey(
+                *ctx_.masterPub, *ctx_.masterPriv, "forger-external");
+            forgerPriv = forgerKeys.second;
+        } catch (...) {
+            // Key derivation failed → skip all forgery samples
+            forgeryCount = 0;
+        }
+    }
+
     for (std::size_t i = 0; i < forgeryCount; ++i) {
-        auto realUser = randomUserId(config.numUsers);
-        auto otherUser = randomOtherUserId(config.numUsers, realUser);
-        auto message = randomMessage();
-        auto it = ctx_.userKeys.find(otherUser);
-        if (it == ctx_.userKeys.end()) {
+        if (config.numUsers < 2) {
             continue;
         }
 
-        // Sign with other user's private key, but claim realUser's identity
-        AuditDataMap signInput;
-        signInput.emplace("message", CAMatrix::Crypto::CryptoArray(message.begin(), message.end()));
-        signInput.emplace("userId", otherUser);
-        signInput.emplace("masterPub", ctx_.masterPub);
-        signInput.emplace("userPriv", it->second.priv);
+        auto message = randomMessage();
+        CAMatrix::Crypto::CryptoArray msgBytes(message.begin(), message.end());
 
-        CAMatrix::Crypto::CryptoArray signature;
+        IdentitySampleLabel sample;
+        sample.message = message;
+        sample.shouldAccept = false;
+
+        // Legitimate part: user-0 .. user-(N-2) sign the same message
+        for (std::size_t j = 0; j < config.numUsers - 1; ++j) {
+            auto userId = "user-" + std::to_string(j);
+            auto it = ctx_.userKeys.find(userId);
+            if (it == ctx_.userKeys.end()) {
+                continue;
+            }
+
+            sample.signatures.push_back(signForUser(userId, msgBytes, ctx_, algorithmType_));
+            sample.userIds.push_back(userId);
+            sample.userPubKeys.push_back(it->second.pub);
+        }
+
+        // Forgery part: forge a signature with an UNREGISTERED key pair
+        // (external attacker — not in the user pool), claiming to be
+        // user-(N-1) → aggregate verification must reject.
+        auto victimId = "user-" + std::to_string(config.numUsers - 1);
+        auto victimKeyIt = ctx_.userKeys.find(victimId);
+        if (victimKeyIt == ctx_.userKeys.end()) {
+            continue;
+        }
+
         try {
             auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+
+            AuditDataMap signInput;
+            signInput.emplace("message", msgBytes);
+            signInput.emplace("userId", "forger-external");
+            signInput.emplace("masterPub", ctx_.masterPub);
+            signInput.emplace("userPriv", forgerPriv);
+
             auto variant = algo->createRequest(
                 CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
             auto req = std::get<std::shared_ptr<
                 CAMatrix::Identity::Core::SignRequest>>(*variant);
-            auto sigRaw = algo->sign(*req);
-            signature = std::move(sigRaw);
+            sample.signatures.push_back(algo->sign(*req));
+            sample.userIds.push_back(victimId);   // claims to be user-(N-1)
+            sample.userPubKeys.push_back(victimKeyIt->second.pub);
         } catch (...) {
             continue;
         }
 
-        // The signature is valid for otherUser, but we claim it's from realUser
-        samples.push_back({message, std::move(signature), realUser, false});
+        if (sample.signatures.size() == config.numUsers) {
+            samples.push_back(std::move(sample));
+        }
     }
 
-    // ── 3. Tampered message samples: legitimate signature + modified message ──
+    // ── 3. Tampered message samples: signatures over the original message,
+    //    verification uses the tampered message → aggregate must reject ──
     std::size_t tamperedCount = static_cast<std::size_t>(
         static_cast<double>(totalSamples) * neg.tamperedRatio);
     for (std::size_t i = 0; i < tamperedCount; ++i) {
-        auto userId = randomUserId(config.numUsers);
         auto originalMsg = randomMessage();
         auto tamperedMsg = tamperMessage(originalMsg);
-        auto it = ctx_.userKeys.find(userId);
-        if (it == ctx_.userKeys.end()) {
-            continue;
+        CAMatrix::Crypto::CryptoArray originalBytes(originalMsg.begin(), originalMsg.end());
+
+        IdentitySampleLabel sample;
+        sample.message = tamperedMsg;   // verification uses the tampered message
+        sample.shouldAccept = false;
+
+        fillLegitSigners(sample, originalBytes, ctx_, algorithmType_, config.numUsers);
+        if (sample.signatures.size() == config.numUsers) {
+            samples.push_back(std::move(sample));
         }
-
-        // Sign the original message
-        AuditDataMap signInput;
-        signInput.emplace("message", CAMatrix::Crypto::CryptoArray(originalMsg.begin(), originalMsg.end()));
-        signInput.emplace("userId", userId);
-        signInput.emplace("masterPub", ctx_.masterPub);
-        signInput.emplace("userPriv", it->second.priv);
-
-        CAMatrix::Crypto::CryptoArray signature;
-        try {
-            auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
-            auto variant = algo->createRequest(
-                CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
-            auto req = std::get<std::shared_ptr<
-                CAMatrix::Identity::Core::SignRequest>>(*variant);
-            auto sigRaw = algo->sign(*req);
-            signature = std::move(sigRaw);
-        } catch (...) {
-            continue;
-        }
-
-        // Verify with tampered message — should fail
-        samples.push_back({tamperedMsg, std::move(signature), userId, false});
     }
 
-    // ── 4. Impersonation samples: legitimate signature but wrong userId ──
+    // ── 4. Impersonation samples: one signer claims another identity → reject ──
     std::size_t impCount = static_cast<std::size_t>(
         static_cast<double>(totalSamples) * neg.impersonationRatio);
     for (std::size_t i = 0; i < impCount; ++i) {
-        auto realUser = randomUserId(config.numUsers);
-        auto fakeUser = randomOtherUserId(config.numUsers, realUser);
-        auto message = randomMessage();
-        auto itFake = ctx_.userKeys.find(fakeUser);
-        if (itFake == ctx_.userKeys.end()) {
+        if (config.numUsers < 2) {
             continue;
         }
 
-        // Sign with fakeUser's key
-        AuditDataMap signInput;
-        signInput.emplace("message", CAMatrix::Crypto::CryptoArray(message.begin(), message.end()));
-        signInput.emplace("userId", fakeUser);
-        signInput.emplace("masterPub", ctx_.masterPub);
-        signInput.emplace("userPriv", itFake->second.priv);
+        auto message = randomMessage();
+        CAMatrix::Crypto::CryptoArray msgBytes(message.begin(), message.end());
 
-        CAMatrix::Crypto::CryptoArray signature;
+        IdentitySampleLabel sample;
+        sample.message = message;
+        sample.shouldAccept = false;
+
+        // Legitimate part: user-0 .. user-(N-2)
+        for (std::size_t j = 0; j < config.numUsers - 1; ++j) {
+            auto userId = "user-" + std::to_string(j);
+            auto it = ctx_.userKeys.find(userId);
+            if (it == ctx_.userKeys.end()) {
+                continue;
+            }
+
+            sample.signatures.push_back(signForUser(userId, msgBytes, ctx_, algorithmType_));
+            sample.userIds.push_back(userId);
+            sample.userPubKeys.push_back(it->second.pub);
+        }
+
+        // Impersonation part: signed with user-0's key, claims to be user-(N-1)
+        auto victimId = "user-" + std::to_string(config.numUsers - 1);
+        auto victimKeyIt = ctx_.userKeys.find(victimId);
+        auto impersonatorKeyIt = ctx_.userKeys.find("user-0");
+        if (victimKeyIt == ctx_.userKeys.end() || impersonatorKeyIt == ctx_.userKeys.end()) {
+            continue;
+        }
+
+        AuditDataMap signInput;
+        signInput.emplace("message", msgBytes);
+        signInput.emplace("userId", "user-0");
+        signInput.emplace("masterPub", ctx_.masterPub);
+        signInput.emplace("userPriv", impersonatorKeyIt->second.priv);
+
         try {
             auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
             auto variant = algo->createRequest(
                 CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
             auto req = std::get<std::shared_ptr<
                 CAMatrix::Identity::Core::SignRequest>>(*variant);
-            auto sigRaw = algo->sign(*req);
-            signature = std::move(sigRaw);
+            sample.signatures.push_back(algo->sign(*req));
+            sample.userIds.push_back(victimId);   // claims to be user-(N-1)
+            sample.userPubKeys.push_back(victimKeyIt->second.pub);
         } catch (...) {
             continue;
         }
 
-        // Claim this is from realUser — signature won't match
-        samples.push_back({message, std::move(signature), realUser, false});
+        if (sample.signatures.size() == config.numUsers) {
+            samples.push_back(std::move(sample));
+        }
     }
 
     // ── 5. Shuffle samples to avoid ordering bias ──
@@ -445,29 +562,6 @@ IdentityVerifyScenario::generateTestSamples(const IdentityConfig& config)
 // ==================================================================
 // Private helpers
 // ==================================================================
-
-std::string IdentityVerifyScenario::randomUserId(std::size_t numUsers)
-{
-    std::uniform_int_distribution<std::size_t> dist(0, numUsers - 1);
-    return "user-" + std::to_string(dist(rng_));
-}
-
-std::string IdentityVerifyScenario::randomOtherUserId(
-    std::size_t numUsers,
-    const std::string& excludeId)
-{
-    if (numUsers <= 1) {
-        return excludeId; // can't pick a different user with only 1 user
-    }
-    std::uniform_int_distribution<std::size_t> dist(0, numUsers - 2);
-    std::size_t idx = dist(rng_);
-    // Map to skip the excluded user
-    auto excludedNum = std::stoull(excludeId.substr(5)); // "user-NNN"
-    if (idx >= excludedNum) {
-        ++idx;
-    }
-    return "user-" + std::to_string(idx);
-}
 
 std::string IdentityVerifyScenario::randomMessage()
 {

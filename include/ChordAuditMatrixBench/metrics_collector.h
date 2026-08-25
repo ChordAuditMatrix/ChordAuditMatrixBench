@@ -56,6 +56,7 @@ public:
     /**
      * @brief Record the outcome of a single PDP audit iteration
      * @param detected Whether data incompleteness was detected
+     * @param reason Human-readable detection reason (currently unused)
      */
     void recordOutcome(bool detected, const std::string& /*reason*/)
     {
@@ -91,6 +92,7 @@ public:
 
     /**
      * @brief Record the one-time setup stage timings
+     * @param timings Setup-stage timing measurements to store
      */
     void recordSetupTimings(const StageTimings& timings)
     {
@@ -101,6 +103,7 @@ public:
 
     /**
      * @brief Record stage timings for a single iteration
+     * @param timings Per-stage timing measurements from one iteration
      */
     void recordTimings(const StageTimings& timings)
     {
@@ -116,7 +119,8 @@ public:
     // ── Message sizes ──
 
     /**
-     * @brief Record message sizes from an iteration
+     * @brief Record message sizes from an iteration (first non-zero sample wins)
+     * @param sizes Serialized message sizes from one iteration
      */
     void recordMessageSizes(const MessageSizes& sizes)
     {
@@ -125,10 +129,9 @@ public:
         }
     }
 
-    // ── Memory ──
-
     /**
      * @brief Set peak memory usage
+     * @param bytes Peak memory usage in bytes
      */
     void setMemoryPeak(std::size_t bytes)
     {
@@ -142,6 +145,8 @@ public:
      * @details Called by PdpAuditScenario::computeResult(). Populates
      *          totalBlocks/corruptedBlocks/sampleSize/maintenanceOps from config,
      *          detections/confidenceRate from counters, then common metrics.
+     * @param result [OUT] PDP result to populate
+     * @param config PDP configuration used for the run
      */
     void fillPdpResult(PdpAuditResult& result, const PdpAuditConfig& config) const
     {
@@ -158,6 +163,8 @@ public:
     /**
      * @brief Fill an IdentityResult with identity-specific + common metrics
      * @details Called by IdentityVerifyScenario::computeResult().
+     * @param result [OUT] Identity result to populate
+     * @param config Identity configuration used for the run
      */
     void fillIdentityResult(IdentityResult& result, const IdentityConfig& config) const
     {
@@ -201,31 +208,31 @@ public:
 
 private:
     // ── PDP audit counters ──
-    std::size_t iterations_ = 0;      ///< Total PDP audit iterations (= detections + non-detections)
-    std::size_t detections_ = 0;
+    std::size_t iterations_ = 0; /**< Total PDP audit iterations (= detections + non-detections) */
+    std::size_t detections_ = 0; /**< PDP iterations that detected corruption */
 
     // ── Identity verification counters ──
-    std::size_t totalVerifySamples_ = 0;
-    std::size_t trueAccepts_ = 0;
-    std::size_t falseAccepts_ = 0;
-    std::size_t trueRejects_ = 0;
-    std::size_t falseRejects_ = 0;
+    std::size_t totalVerifySamples_ = 0; /**< Total identity samples verified */
+    std::size_t trueAccepts_ = 0; /**< True accepts (TP) */
+    std::size_t falseAccepts_ = 0; /**< False accepts (FP) */
+    std::size_t trueRejects_ = 0; /**< True rejects (TN) */
+    std::size_t falseRejects_ = 0; /**< False rejects (FN) */
 
     // ── Setup timings (one-time) ──
-    StageTimings setupTimings_;
+    StageTimings setupTimings_; /**< One-time setup-stage timings */
 
     // ── Per-iteration timing vectors ──
-    std::vector<double> genChallengesMs_;
-    std::vector<double> genProofsMs_;
-    std::vector<double> verifyProofsMs_;
-    std::vector<double> signMs_;
-    std::vector<double> verifyMs_;
-    std::vector<double> aggregateVerifyMs_;
-    std::vector<double> maintainMs_;
+    std::vector<double> genChallengesMs_; /**< Per-iteration challenge-generation times */
+    std::vector<double> genProofsMs_; /**< Per-iteration proof-generation times */
+    std::vector<double> verifyProofsMs_; /**< Per-iteration proof-verification times */
+    std::vector<double> signMs_; /**< Per-iteration individual signing times */
+    std::vector<double> verifyMs_; /**< Per-iteration individual verification times */
+    std::vector<double> aggregateVerifyMs_; /**< Per-iteration aggregate-verification times */
+    std::vector<double> maintainMs_; /**< Per-iteration dynamic-PDP maintenance times */
 
     // ── Message sizes ──
-    MessageSizes messageSizes_;
-    std::size_t memoryPeakBytes_ = 0;
+    MessageSizes messageSizes_; /**< First recorded message sizes */
+    std::size_t memoryPeakBytes_ = 0; /**< Peak memory usage in bytes */
 
     // ── Helpers ──
 

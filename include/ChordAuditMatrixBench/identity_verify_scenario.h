@@ -61,17 +61,19 @@ namespace CAMatrix::Audit::Benchmark {
 
 /**
  * @struct IdentitySampleLabel
- * @brief A single test sample with ground-truth label for identity verification
- * @details Contains a (message, signature, userId) triple and the expected
- *          verification outcome. Positive samples have shouldAccept=true
- *          (legitimate signature), negative samples have shouldAccept=false
- *          (forged, tampered, or impersonated).
+ * @brief A multi-signer aggregate verification test sample.
+ * @details Every sample carries numUsers individual signatures σᵢ, one per
+ *          signer, all over the same message. Verification aggregates them
+ *          (Σ = Σ αᵢσᵢ) and aggregate-verifies in one operation.
+ *          n=1 (numUsers=1) degenerates to individual verification.
  */
 struct IdentitySampleLabel {
-    std::string message;                        ///< Original message (hex string)
-    CAMatrix::Crypto::CryptoArray signature;     ///< Raw signature bytes (may be forged)
-    std::string userId;                         ///< Claimed user identity
-    bool shouldAccept;                          ///< Ground truth: should the signature be accepted?
+    std::string message; /**< Original message (hex string) */
+    std::vector<CAMatrix::Crypto::CryptoArray> signatures; /**< N individual σᵢ */
+    std::vector<std::string> userIds; /**< N signer IDs */
+    std::vector<std::shared_ptr<
+        CAMatrix::Identity::Core::AlgoUserPublicParams>> userPubKeys; /**< N signer public keys */
+    bool shouldAccept; /**< Ground truth: should the aggregate be accepted? */
 };
 
 // ==================================================================
@@ -147,6 +149,7 @@ public:
         std::shared_ptr<CAMatrix::Identity::Core::IdentityAlgorithmManager> manager);
 
     /// @brief Returns the algorithm type string
+    /// @return Algorithm type identifier
     std::string algorithmType() const override { return algorithmType_; }
 
     /**
@@ -164,21 +167,27 @@ public:
      * @return true if iteration completed successfully
      */
     bool runIteration() override;
-
     /// @brief Records per-sample TP/FP/TN/FN outcomes from the last iteration
+    /// @param collector MetricsCollector to record into
     void recordIteration(MetricsCollector& collector) override;
 
     /// @brief Returns an IdentityResult populated via MetricsCollector::fillIdentityResult()
+    /// @param collector Aggregated metrics
+    /// @param config Identity benchmark configuration
+    /// @return Polymorphic identity result pointer
     std::unique_ptr<BenchmarkResult> computeResult(
         const MetricsCollector& collector, const BenchmarkConfig& config) override;
 
     /// @brief Returns setup stage timings
+    /// @return Setup-stage timings
     StageTimings getSetupTimings() const override;
 
     /// @brief Returns timings from the most recent runIteration()
+    /// @return Per-stage timings from the last iteration
     StageTimings getLastTimings() const override;
 
     /// @brief Returns message sizes from the most recent runIteration()
+    /// @return Message sizes from the last iteration
     MessageSizes getLastMessageSizes() const override;
 
     /**
@@ -189,32 +198,37 @@ public:
     // ── Iteration result accessors ──
 
     /// @brief Accuracy rate from the most recent iteration
+    /// @return Accuracy rate in [0, 1]
     double lastAccuracyRate() const { return lastAccuracyRate_; }
 
     /// @brief True accepts (TP) from the most recent iteration
+    /// @return True accept count
     std::size_t lastTrueAccepts() const { return lastTA_; }
     /// @brief False accepts (FP) from the most recent iteration
+    /// @return False accept count
     std::size_t lastFalseAccepts() const { return lastFA_; }
     /// @brief True rejects (TN) from the most recent iteration
+    /// @return True reject count
     std::size_t lastTrueRejects() const { return lastTR_; }
     /// @brief False rejects (FN) from the most recent iteration
+    /// @return False reject count
     std::size_t lastFalseRejects() const { return lastFR_; }
 
 private:
-    std::string algorithmType_;         ///< Algorithm type identifier
-    std::shared_ptr<CAMatrix::Identity::Core::IdentityAlgorithmManager> manager_; ///< Injected manager
-    IdentityScenarioContext ctx_;        ///< Scenario state from setup()
-    IdentityConfig config_;            ///< Active configuration
-    std::mt19937 rng_;                  ///< Random number generator
+    std::string algorithmType_; /**< Algorithm type identifier */
+    std::shared_ptr<CAMatrix::Identity::Core::IdentityAlgorithmManager> manager_; /**< Injected manager */
+    IdentityScenarioContext ctx_; /**< Scenario state from setup() */
+    IdentityConfig config_; /**< Active configuration */
+    std::mt19937 rng_; /**< Random number generator */
 
     // ── Last iteration results ──
-    double lastAccuracyRate_ = 0;       ///< Accuracy rate from last iteration
-    std::size_t lastTA_ = 0;           ///< True accepts from last iteration
-    std::size_t lastFA_ = 0;           ///< False accepts from last iteration
-    std::size_t lastTR_ = 0;           ///< True rejects from last iteration
-    std::size_t lastFR_ = 0;           ///< False rejects from last iteration
-    StageTimings lastTimings_;          ///< Per-stage timings from last iteration
-    MessageSizes lastMessageSizes_;     ///< Message sizes from last iteration
+    double lastAccuracyRate_ = 0; /**< Accuracy rate from last iteration */
+    std::size_t lastTA_ = 0; /**< True accepts from last iteration */
+    std::size_t lastFA_ = 0; /**< False accepts from last iteration */
+    std::size_t lastTR_ = 0; /**< True rejects from last iteration */
+    std::size_t lastFR_ = 0; /**< False rejects from last iteration */
+    StageTimings lastTimings_; /**< Per-stage timings from last iteration */
+    MessageSizes lastMessageSizes_; /**< Message sizes from last iteration */
 
     // ── Private helpers ──
 
@@ -225,22 +239,6 @@ private:
      */
     std::vector<IdentitySampleLabel> generateTestSamples(
         const IdentityConfig& config);
-
-    /**
-     * @brief Pick a random user ID from the configured user set
-     * @param numUsers Total number of users
-     * @return User ID string (e.g., "user-3")
-     */
-    std::string randomUserId(std::size_t numUsers);
-
-    /**
-     * @brief Pick a random user ID different from the given one
-     * @param numUsers Total number of users
-     * @param excludeId User ID to exclude
-     * @return A different user ID string
-     */
-    std::string randomOtherUserId(std::size_t numUsers,
-                                  const std::string& excludeId);
 
     /**
      * @brief Generate a random message string
