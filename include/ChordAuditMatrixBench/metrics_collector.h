@@ -227,7 +227,7 @@ private:
     std::vector<double> verifyProofsMs_; /**< Per-iteration proof-verification times */
     std::vector<double> signMs_; /**< Per-iteration individual signing times */
     std::vector<double> aggregateVerifyMs_; /**< Per-iteration aggregate-verification times */
-    std::vector<double> aggregateMs_; /**< Per-iteration aggregation times (online aggregateSessionSignatures) */
+    std::vector<double> aggregateMs_; /**< Per-iteration Aggregate operation times */
     std::vector<double> maintainMs_; /**< Per-iteration dynamic-PDP maintenance times */
 
     // ── Message sizes ──

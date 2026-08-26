@@ -73,8 +73,8 @@ add_subdirectory(3rdparty/ChordAuditMatrixBench EXCLUDE_FROM_ALL)
 ### Online Identity Algorithms (session-coordinated)
 
 Algorithms whose `kind() == Online` (derived from
-`OnlineIdentitySigningAlgorithm`, e.g. `SM9Online`) are driven through the
-session-coordinated path in addition to the offline single-signature path:
+`OnlineIdentitySigningAlgorithm`, e.g. `SM9Online`) carry a coordinator-issued
+session string through the common identity signing and aggregation operations:
 
 - **Session strings** — generated internally per sample via
   `makeSessionString("bench-" + counter, "IdentityVerify")`; the session id
@@ -84,8 +84,8 @@ session-coordinated path in addition to the offline single-signature path:
 - **Aggregate scenario** — automatically enabled when the algorithm is Online
   **and** `--num-users >= 2` (the signer count reuses `--num-users`). Each
   aggregate sample has n = `--num-users` distinct signers signing distinct
-  messages under **one shared session string**, then aggregated via
-  `aggregateSessionSignatures` and verified via `aggregateVerify` (`ONA`).
+  messages under **one shared session string**, then uses the common
+  `aggregate(AggregateRequest)` operation and is aggregate-verified (`ONA`).
 - **Sample kinds (per n, equal legal vs tampered counts)**:
   - Legal aggregate → accept (TP);
   - Tampered: one byte flipped inside the aggregate signature bytes → reject (TN);

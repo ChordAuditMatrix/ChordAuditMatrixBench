@@ -24,12 +24,11 @@
  *          containing both positive (legitimate signatures) and negative
  *          (forged, tampered, impersonated) samples.
  *
- *          Online algorithms (derived from
- *          OnlineIdentitySigningAlgorithm) additionally exercise the
- *          session-coordinated aggregation path. The number of signers is
- *          supplied by numUsers. The same labeled sample flow measures
- *          aggregation and aggregate verification for both algorithm tiers.
- *
+ *          Both Online and Offline algorithms use the common
+ *          IdentitySigningAlgorithm::aggregate(AggregateRequest) operation.
+ *          Online requests carry the session string used while signing;
+ *          Offline requests leave it empty. The same labeled sample flow
+ *          measures aggregation and aggregate verification for both tiers.
  *          Pipeline:
  *          1. setup(): kind dispatch (Online/Offline) → create manager →
  *             generate master key → derive user keys → generate labeled
@@ -138,10 +137,9 @@ struct IdentityScenarioContext {
  * @details Measures verification accuracy rate (TP+TN)/(TP+FP+TN+FN) across
  *          a labeled test sample set. Supports configurable negative sample
  *          generation: forged signatures, tampered messages, and identity
- *          impersonation. Online algorithms additionally run the
- *          session-coordinated aggregation path; Offline algorithms use their
- *          regular aggregate() operation.
- *
+ *          impersonation. Both Online and Offline algorithms use the common
+ *          aggregate(AggregateRequest) operation; Online requests carry a
+ *          session string and Offline requests leave it empty.
  *          Usage:
  *          ```cpp
  *          auto scenario = std::make_unique<IdentityVerifyScenario>("SM9Online");

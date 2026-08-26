@@ -21,13 +21,11 @@
  * @details Implements the setup/runIteration/teardown lifecycle for identity
  *          verification benchmarking. Generates labeled test samples containing
  *          legitimate signatures and various forgery types, then measures
- *          verification accuracy across iterations. Online algorithms
- *          (OnlineIdentitySigningAlgorithm tier) additionally generate
- *          session-coordinated aggregate samples: n = numUsers signers under
- *          one shared session string, aggregated per iteration (aggregateMs /
- *          aggregateSignatureBytes) and verified; tampered aggregates are
- *          rejected, cross-session mixing and duplicate signers are counted
- *          as rejected aggregations.
+ *          verification accuracy across iterations. Both Online and Offline
+ *          algorithms aggregate through IdentitySigningAlgorithm::aggregate()
+ *          with an AggregateRequest; Online requests carry a session string,
+ *          while Offline requests leave it empty. Aggregate timing and output
+ *          bytes are collected uniformly for both tiers.
  * @author Dylan Liu
  * @version 2.1.0
  * @date 2026-08-25
@@ -253,28 +251,35 @@ bool IdentityVerifyScenario::runIteration()
     for (const auto& sample : ctx_.testSamples) {
         CAMatrix::Crypto::CryptoArray msgBytes(sample.message.begin(), sample.message.end());
 
-        // ── 1. Aggregate individual signatures → Σ (tier-specific) ──
+        // ── 1. Aggregate individual signatures → Σ ──
         CAMatrix::Crypto::CryptoArray aggSig;
         bool accepted = false;
         try {
             const double aggMs = measureMs([&] {
-                if (isOnline_) {
-                    aggSig = onlineAlgo_->aggregateSessionSignatures(
-                        sample.signatures, sample.sessionString);
-                } else {
-                    AuditDataMap aggInput;
-                    aggInput.emplace("message", msgBytes);
-                    aggInput.emplace("signatures", sample.signatures);
-                    aggInput.emplace("userIds", sample.userIds);
-                    aggInput.emplace("userPubKeys", sample.userPubKeys);
-                    aggInput.emplace("masterPub", ctx_.masterPub);
-                    auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
-                    auto aggVariant = algo->createRequest(
-                        CAMatrix::Identity::Core::IdentityOperation::Aggregate, aggInput);
-                    auto aggReq = std::get<std::shared_ptr<
-                        CAMatrix::Identity::Core::AggregateRequest>>(*aggVariant);
-                    aggSig = algo->aggregate(*aggReq);
-                }
+                AuditDataMap aggInput;
+                aggInput.emplace(std::string(
+                    CAMatrix::Identity::Core::IdentityVerifyContract::kMessage), msgBytes);
+                aggInput.emplace(std::string(
+                    CAMatrix::Identity::Core::IdentityVerifyContract::kSignatures),
+                    sample.signatures);
+                aggInput.emplace(std::string(
+                    CAMatrix::Identity::Core::IdentityVerifyContract::kUserIds),
+                    sample.userIds);
+                aggInput.emplace(std::string(
+                    CAMatrix::Identity::Core::IdentityVerifyContract::kUserPubKeys),
+                    sample.userPubKeys);
+                aggInput.emplace(std::string(
+                    CAMatrix::Identity::Core::IdentityVerifyContract::kSessionString),
+                    sample.sessionString);
+                aggInput.emplace(std::string(
+                    CAMatrix::Identity::Core::IdentityVerifyContract::kMasterPub),
+                    ctx_.masterPub);
+                auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
+                auto aggVariant = algo->createRequest(
+                    CAMatrix::Identity::Core::IdentityOperation::Aggregate, aggInput);
+                auto aggReq = std::get<std::shared_ptr<
+                    CAMatrix::Identity::Core::AggregateRequest>>(*aggVariant);
+                aggSig = algo->aggregate(*aggReq);
             });
             totalAggregateMs += aggMs;
         } catch (...) {
