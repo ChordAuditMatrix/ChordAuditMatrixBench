@@ -129,46 +129,72 @@ public:
 // ==================================================================
 
 /**
+ * @struct TimingMetric
+ * @brief Aggregated timing measurements for one benchmark stage
+ * @details totalMs is the sum over all attempted calls, averageMs is derived
+ *          from totalMs / callCount, and callCount is the number of calls
+ *          included in totalMs.
+ */
+struct TimingMetric {
+    double totalMs = 0.0;
+    double averageMs = 0.0;
+    std::size_t callCount = 0;
+};
+
+/**
  * @struct StageTimings
- * @brief Timing measurements (ms) for each audit pipeline stage
+ * @brief Timing measurements for each audit pipeline stage
  */
 struct StageTimings {
     // --- PDP audit stages ---
-    double initAlgoMs = 0; /**< Algorithm initialization time */
-    double genKeysMs = 0; /**< Key generation time */
-    double genTagsMs = 0; /**< Tag generation time */
-    double genChallengesMs = 0; /**< Challenge generation time */
-    double genProofsMs = 0; /**< Proof generation time */
-    double verifyProofsMs = 0; /**< Proof verification time */
+    TimingMetric initAlgorithm; /**< Algorithm initialization time */
+    TimingMetric generateKeys; /**< Key generation time */
+    TimingMetric generateTags; /**< Tag generation time */
+    TimingMetric generateChallenges; /**< Challenge generation time */
+    TimingMetric generateProofs; /**< Proof generation time */
+    TimingMetric verifyProofs; /**< Proof verification time */
 
-    // --- Identity verification stages (0 for PDP) ---
-    double signMs = 0; /**< Individual signing time */
-    double aggregateVerifyMs = 0; /**< Aggregate verification time */
-    double aggregateMs = 0; /**< Aggregation stage timing for Online and Offline algorithms */
+    // --- Identity verification stages ---
+    TimingMetric sign; /**< Individual signing time */
+    TimingMetric aggregateVerify; /**< Aggregate verification time */
+    TimingMetric aggregate; /**< Aggregation stage timing */
 
-    // --- Dynamic PDP stages (0 for static PDP) ---
-    double maintainMs = 0; /**< Dynamic PDP maintenance (Update/Insert/Delete) time */
+    // --- Dynamic PDP stages ---
+    TimingMetric maintain; /**< Dynamic PDP maintenance time */
 };
 
 // ==================================================================
-// Message size metrics
+// Communication metrics
 // ==================================================================
 
 /**
+ * @struct MessageMetric
+ * @brief Aggregated serialized message measurements for one communication stage
+ * @details totalBytes is the sum over all measured messages, averageBytes is
+ *          derived from totalBytes / messageCount, and messageCount is the
+ *          number of messages included in totalBytes.
+ */
+struct MessageMetric {
+    std::size_t totalBytes = 0;
+    double averageBytes = 0.0;
+    std::size_t messageCount = 0;
+};
+
+/**
  * @struct MessageSizes
- * @brief Serialized message sizes for challenge/proof and signature/verify messages
+ * @brief Serialized message measurements for audit and identity stages
  */
 struct MessageSizes {
     // --- PDP audit ---
-    std::size_t challengeBytes = 0; /**< Serialized challenge message size */
-    std::size_t proofBytes = 0; /**< Serialized proof message size */
+    MessageMetric challenge; /**< Serialized challenge messages */
+    MessageMetric proof; /**< Serialized proof messages */
 
-    // --- Identity verification (0 for PDP) ---
-    std::size_t signatureBytes = 0; /**< Serialized signature message size */
-    std::size_t verifyRequestBytes = 0; /**< Serialized verify-request message size */
-    std::size_t aggregateSignatureBytes = 0; /**< Serialized aggregate signature bytes */
-    std::size_t userKeyBytes = 0; /**< Serialized user private key bytes (KeyGen stage communication) */
+    // --- Identity verification ---
+    MessageMetric keyGeneration; /**< Serialized private-key messages */
+    MessageMetric signing; /**< Serialized individual-signature messages */
+    MessageMetric verification; /**< Serialized aggregate-signature messages */
 };
+
 
 // ==================================================================
 // Audit outcome (single iteration)
@@ -192,8 +218,6 @@ struct AuditOutcome {
 /**
  * @class BenchmarkResult
  * @brief Polymorphic base for all benchmark results
- * @details Holds only the common metrics produced/reported by all scenarios.
- *          Scenario-specific metrics live in subclasses.
  */
 class BenchmarkResult {
 public:
@@ -202,13 +226,13 @@ public:
     std::string algorithmType; /**< Algorithm identifier */
     std::size_t iterations = 0; /**< Iterations performed */
 
-    StageTimings setupTimings; /**< Setup-phase timings */
-    StageTimings avgTimings; /**< Average per-iteration timings */
-    StageTimings minTimings; /**< Minimum per-iteration timings */
-    StageTimings maxTimings; /**< Maximum per-iteration timings */
+    StageTimings setupTimings; /**< Setup-phase timing metrics */
+    StageTimings iterationTimings; /**< Aggregated per-iteration timing metrics */
+
+    MessageSizes setupMessageSizes; /**< Setup-phase communication metrics */
+    MessageSizes iterationMessageSizes; /**< Aggregated per-iteration communication metrics */
 
     std::size_t memoryPeakBytes = 0; /**< Peak memory usage */
-    MessageSizes messageSizes; /**< Serialized message sizes */
 };
 
 /**

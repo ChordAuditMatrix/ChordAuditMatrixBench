@@ -76,30 +76,21 @@ Algorithms whose `kind() == Online` (derived from
 `OnlineIdentitySigningAlgorithm`, e.g. `SM9Online`) carry a coordinator-issued
 session string through the common identity signing and aggregation operations:
 
-- **Session strings** — generated internally per sample via
-  `makeSessionString("bench-" + counter, "IdentityVerify")`; the session id
-  comes from an internal incrementing counter, so **no new CLI parameter** is
-  introduced. Each single-signature sample signs under its own session string
-  (embedded in the `ONS` signature, self-contained at verification time).
-- **Aggregate scenario** — automatically enabled when the algorithm is Online
-  **and** `--num-users >= 2` (the signer count reuses `--num-users`). Each
-  aggregate sample has n = `--num-users` distinct signers signing distinct
-  messages under **one shared session string**, then uses the common
-  `aggregate(AggregateRequest)` operation and is aggregate-verified (`ONA`).
-- **Sample kinds (per n, equal legal vs tampered counts)**:
-  - Legal aggregate → accept (TP);
-  - Tampered: one byte flipped inside the aggregate signature bytes → reject (TN);
-  - Tampered: one signer entry removed from the `ONA` roster → reject (TN);
-  - Cross-session mixing (signatures from two session strings fed to the
-    aggregator) → aggregation rejected, counted in `rejectedAggregation`
-    (never a TP/FP);
-  - Duplicate signer (same session + userId signs twice) → aggregation
-    rejected, counted in `rejectedAggregation`.
-- **New metrics** — the aggregation stage timing (`aggregateMs`) and the
-  aggregate signature bytes (`aggregateSignatureBytes`, `ONA` roster grows
-  O(n) with the signer count) are collected per iteration and reported
-  alongside the existing four-stage timings; the report also carries
-  `algorithmKind` (`Online`/`Offline`) and `aggregateSigners` (n; 0 when off).
+- **Session strings** — generated internally for every sample and iteration
+  from a random canonical UUID-v4-like 36-character session ID and the
+  `"IdentityVerify"` context; no new CLI parameter is introduced. Each
+  single-signature sample signs under its own session string.
+- **Aggregate scenario** — automatically enabled when `--num-users >= 2`.
+  The signer count reuses `--num-users`; each sample contains n registered
+  signers using one shared session string, then uses the common
+  `aggregate(AggregateRequest)` operation and is aggregate-verified.
+- **Sample kinds** — legal, forged signature, tampered message, and
+  impersonated identity. Negative-sample ratios are controlled by the existing
+  `--forgery-ratio`, `--tampered-ratio`, and `--impersonation-ratio` options.
+- **Metrics** — setup and iteration timing metrics expose total, average, and
+  call-count values. Identity communication metrics cover KGC-issued private
+  keys, individual signatures, and aggregate signatures sent for verification;
+  local aggregation has no communication metric.
 
 See the design docs (Doc 4: ChordAuditMatrixBenchmark完善文档.md §2/§3) for the
 exact sample construction and accuracy accounting rules.

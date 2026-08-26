@@ -86,7 +86,8 @@ static void printUsage(const char* progName)
     spdlog::info("  --help                      Show this help message");
     spdlog::info("");
     spdlog::info("Online algorithms (kind=Online, e.g. SM9Online): session strings are");
-    spdlog::info("generated internally per sample (sessionId \"bench-N\", context \"IdentityVerify\").");
+    spdlog::info("generated internally per sample from a canonical UUID-v4-like 36-character");
+    spdlog::info("session ID and the \"IdentityVerify\" context.");
     spdlog::info("With --num-users >= 2 the aggregate scenario is enabled AUTOMATICALLY");
     spdlog::info("(n = --num-users signers per aggregate sample) — no extra flags needed.");
     spdlog::info("");

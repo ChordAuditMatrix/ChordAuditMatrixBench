@@ -90,14 +90,30 @@ AuditMsg::RawInput jsonInput(const ::Json::Value& v)
         std::make_shared<std::string>(::Json::FastWriter().write(v)));
 }
 
-/// Helper: measure elapsed time in milliseconds for a callable
+void addTiming(TimingMetric& metric, double totalMs, std::size_t callCount = 1)
+{
+    metric.totalMs += totalMs;
+    metric.callCount += callCount;
+    metric.averageMs = (metric.callCount > 0)
+        ? metric.totalMs / static_cast<double>(metric.callCount) : 0.0;
+}
+
+/// Measure a stage and count the attempted public operation.
 template <typename Func>
-double measureMs(Func&& fn)
+void measureTiming(TimingMetric& metric, Func&& fn)
 {
     auto start = std::chrono::steady_clock::now();
-    std::forward<Func>(fn)();
+    try {
+        std::forward<Func>(fn)();
+    } catch (...) {
+        auto end = std::chrono::steady_clock::now();
+        addTiming(metric,
+                  std::chrono::duration<double, std::milli>(end - start).count());
+        throw;
+    }
     auto end = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::milli>(end - start).count();
+    addTiming(metric,
+              std::chrono::duration<double, std::milli>(end - start).count());
 }
 
 } // anonymous namespace
@@ -131,6 +147,8 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
 {
     const auto& cfg = dynamic_cast<const PdpAuditConfig&>(config);
     config_ = cfg;
+    ctx_.setupTimings = StageTimings{};
+    ctx_.setupMessageSizes = MessageSizes{};
 
     // Step 1: Resolve strategy from AuditStrategyManager
     if (!strategyManager_ || !strategyManager_->hasAlgorithm(algorithmType_)) {
@@ -146,33 +164,28 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
     // Step 2: Create engine and set strategy
     ctx_.engine = AuditCore::AuditEngineFactory::createInstance();
     ctx_.engine->setStrategy(strategy);
-
     ctx_.opCtx = std::make_unique<AuditCore::AuditOperationContext>();
 
     // Step 3: Generate deterministic data blocks
     ctx_.userId = "benchmark@" + algorithmType_;
     ctx_.fileId = "file-benchmark-" + algorithmType_;
-
     std::uint64_t blockSeed = config.usePseudoRandom ? config.seed : 42;
     ctx_.originalBlocks = makeBlockSource(cfg.totalBlocks, cfg.blockSize, blockSeed);
-    // Initially, corruptedBlocks equals original (no corruption yet)
     ctx_.corruptedBlocks = ctx_.originalBlocks;
 
     // Step 4: Initialize algorithm
-    ctx_.setupTimings.initAlgoMs = measureMs([&]() {
+    measureTiming(ctx_.setupTimings.initAlgorithm, [&]() {
         ctx_.engine->initializeAlgorithm(AuditMsg::RawInput(), *ctx_.opCtx);
     });
 
     // Step 5: Generate keys
     ::Json::Value keyJson;
     keyJson["userId"] = ctx_.userId;
-    ctx_.setupTimings.genKeysMs = measureMs([&]() {
+    measureTiming(ctx_.setupTimings.generateKeys, [&]() {
         ctx_.engine->generateKeys(jsonInput(keyJson), *ctx_.opCtx);
     });
 
     // Step 6 (dynamic PDP only): Inject StateStore BEFORE tag generation
-    // so that generateTags can read per-block metadata (version, timestamp)
-    // from the stateStore for computeBlockHash.
     if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic) {
         auto dynStrategy = std::dynamic_pointer_cast<AuditCore::DynamicAuditStrategy>(strategy);
         if (!dynStrategy) {
@@ -180,82 +193,61 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
                 "PdpAuditScenario: strategy kind is Dynamic but dynamic_pointer_cast failed");
         }
 
-        // Create StateStore via engine (strategy declares type via createStateStore)
-        // This creates all blocks with default metadata (version=1, timestamp=0)
         auto stateStore = ctx_.engine->createStateStore();
         stateStore->addFile(ctx_.fileId, cfg.totalBlocks);
-
         dynStrategy->setStateStore(stateStore);
-        // Keep a reference in context for direct access (avoids protected stateStore() getter)
         ctx_.stateStore = stateStore;
     }
 
     // Step 7: Generate tags from original blocks
-    // (stateStore must already be injected for dynamic PDP so that
     auto tagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
     tagsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(ctx_.originalBlocks));
     tagsDataMap->emplace("fileId", ctx_.fileId);
     tagsDataMap->emplace("userId", ctx_.userId);
-    ctx_.setupTimings.genTagsMs = measureMs([&]() {
+    measureTiming(ctx_.setupTimings.generateTags, [&]() {
         ctx_.engine->generateTags(AuditMsg::RawInput(tagsDataMap), *ctx_.opCtx);
     });
-
-    // Store tags from context
     ctx_.tags = ctx_.opCtx->generateTagsResult->tags;
 
     // Step 8 (dynamic PDP only): Perform maintenance operations
-    if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic) {
-        if (cfg.maintenanceOps > 0) {
-            std::mt19937 rng(config.usePseudoRandom ? config.seed + 2 : 123);
-            std::uniform_int_distribution<std::size_t> blockIdxDist(0, cfg.totalBlocks - 1);
-            // MaintenanceOpType distribution: Update=0, Insert=1, Delete=2
-            std::uniform_int_distribution<int> opTypeDist(0, 2);
+    if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic && cfg.maintenanceOps > 0) {
+        std::mt19937 rng(config.usePseudoRandom ? config.seed + 2 : 123);
+        std::uniform_int_distribution<std::size_t> blockIdxDist(0, cfg.totalBlocks - 1);
+        std::uniform_int_distribution<int> opTypeDist(0, 2);
 
-            for (std::size_t op = 0; op < cfg.maintenanceOps; ++op) {
-                auto blockIdx = blockIdxDist(rng);
-                auto opType = static_cast<AuditMsg::MaintenanceOpType>(opTypeDist(rng));
+        for (std::size_t op = 0; op < cfg.maintenanceOps; ++op) {
+            auto blockIdx = blockIdxDist(rng);
+            auto opType = static_cast<AuditMsg::MaintenanceOpType>(opTypeDist(rng));
 
-                // Build JSON maintenance request (createRequest expects JSON with blockIndices array)
-                ::Json::Value maintainJson;
-                maintainJson["fileId"] = ctx_.fileId;
-                maintainJson["opType"] = static_cast<int>(opType);
-                maintainJson["blockIndices"] = ::Json::Value(::Json::arrayValue);
-                maintainJson["blockIndices"].append(static_cast<::Json::UInt64>(blockIdx));
+            ::Json::Value maintainJson;
+            maintainJson["fileId"] = ctx_.fileId;
+            maintainJson["opType"] = static_cast<int>(opType);
+            maintainJson["blockIndices"] = ::Json::Value(::Json::arrayValue);
+            maintainJson["blockIndices"].append(static_cast<::Json::UInt64>(blockIdx));
 
-                // For Insert, we need pre-generated tags for the new block
-                if (opType == AuditMsg::MaintenanceOpType::Insert) {
-                    // Generate a single new block and its tag
-                    auto newBlockData = std::vector<std::uint8_t>(cfg.blockSize, 0xAB);
-                    auto newBlockSource = std::make_shared<AuditData::MemoryAuditBlockSource>(
-                        std::vector<std::vector<std::uint8_t>>{newBlockData},
-                        cfg.blockSize, 0);
+            AuditCore::AuditOperationContext maintainCtx;
+            maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
+            maintainCtx.generateKeysResult = ctx_.opCtx->generateKeysResult;
 
-                    // Generate tag for the new block
-                    auto newTagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
-                    newTagsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(newBlockSource));
-                    newTagsDataMap->emplace("fileId", ctx_.fileId);
-                    newTagsDataMap->emplace("userId", ctx_.userId);
+            if (opType == AuditMsg::MaintenanceOpType::Insert) {
+                auto newBlockData = std::vector<std::uint8_t>(cfg.blockSize, 0xAB);
+                auto newBlockSource = std::make_shared<AuditData::MemoryAuditBlockSource>(
+                    std::vector<std::vector<std::uint8_t>>{newBlockData},
+                    cfg.blockSize, 0);
 
-                    AuditCore::AuditOperationContext maintainCtx;
-                    maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
-                    maintainCtx.generateKeysResult = ctx_.opCtx->generateKeysResult;
+                auto newTagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
+                newTagsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(newBlockSource));
+                newTagsDataMap->emplace("fileId", ctx_.fileId);
+                newTagsDataMap->emplace("userId", ctx_.userId);
 
+                measureTiming(ctx_.setupTimings.generateTags, [&]() {
                     ctx_.engine->generateTags(AuditMsg::RawInput(newTagsDataMap), maintainCtx);
-
-                    ctx_.setupTimings.maintainMs += measureMs([&]() {
-                        ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
-                    });
-                } else {
-                    // Update or Delete — no new tags needed, just JSON request
-                    AuditCore::AuditOperationContext maintainCtx;
-                    maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
-                    maintainCtx.generateKeysResult = ctx_.opCtx->generateKeysResult;
-
-                    ctx_.setupTimings.maintainMs += measureMs([&]() {
-                        ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
-                    });
-                }
+                });
             }
+
+            measureTiming(ctx_.setupTimings.maintain, [&]() {
+                ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
+            });
         }
     }
 }
@@ -346,6 +338,9 @@ void PdpAuditScenario::prepare(const BenchmarkConfig& config)
 
 bool PdpAuditScenario::runIteration()
 {
+    lastTimings_ = StageTimings{};
+    lastMessageSizes_ = MessageSizes{};
+
     // Create a fresh operation context for this iteration
     // (reuse engine, keys, and tags from setup)
     AuditCore::AuditOperationContext iterCtx;
@@ -356,13 +351,10 @@ bool PdpAuditScenario::runIteration()
     iterCtx.generateTagsResult = ctx_.opCtx->generateTagsResult;
 
     // Step 1: Generate challenges — sample r blocks
-    // For dynamic strategies, use stateStore's actual block count after
-    // maintenance ops (inserts/deletes may have changed it). For static
-    // strategies, use the original block source count.
     ::Json::Value chalJson;
-    chalJson["fileId"]         = ctx_.fileId;
-    chalJson["challengeCount"]  = static_cast<::Json::UInt64>(config_.sampleSize);
-    chalJson["usePseudoRandom"] = false;  // True random for realistic benchmark
+    chalJson["fileId"] = ctx_.fileId;
+    chalJson["challengeCount"] = static_cast<::Json::UInt64>(config_.sampleSize);
+    chalJson["usePseudoRandom"] = false;
     if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic && ctx_.stateStore) {
         chalJson["blockCount"] = static_cast<::Json::UInt64>(
             ctx_.stateStore->getBlockCount(ctx_.fileId));
@@ -370,7 +362,7 @@ bool PdpAuditScenario::runIteration()
         chalJson["blockCount"] = static_cast<::Json::UInt64>(
             ctx_.corruptedBlocks->availableBlockCount());
     }
-    lastTimings_.genChallengesMs = measureMs([&]() {
+    measureTiming(lastTimings_.generateChallenges, [&]() {
         ctx_.engine->generateChallenges(jsonInput(chalJson), iterCtx);
     });
 
@@ -378,7 +370,7 @@ bool PdpAuditScenario::runIteration()
     auto proofsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
     proofsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(ctx_.corruptedBlocks));
     proofsDataMap->emplace("tags", AuditMsg::TagsPtr(ctx_.tags));
-    lastTimings_.genProofsMs = measureMs([&]() {
+    measureTiming(lastTimings_.generateProofs, [&]() {
         ctx_.engine->generateProofs(AuditMsg::RawInput(proofsDataMap), iterCtx);
     });
 
@@ -386,28 +378,30 @@ bool PdpAuditScenario::runIteration()
     ::Json::Value verifyJson;
     verifyJson["fileId"] = ctx_.fileId;
     verifyJson["userId"] = ctx_.userId;
-    lastTimings_.verifyProofsMs = measureMs([&]() {
+    measureTiming(lastTimings_.verifyProofs, [&]() {
         ctx_.engine->verifyProofs(jsonInput(verifyJson), iterCtx);
     });
 
     // Step 4: Check result — detection means verifyProofs returned !ok
     lastDetected_ = !iterCtx.verifyProofsResult->ok;
 
-    // Step 5: Record message sizes from the iteration context
-    // Use serialization to measure actual wire sizes
+    // Step 5: Record serialized challenge and proof messages
     if (iterCtx.generateChallengesResult &&
         iterCtx.generateChallengesResult->challenges) {
         auto serialized = iterCtx.generateChallengesResult->challenges->serialize();
-        lastMessageSizes_.challengeBytes = serialized.size();
+        lastMessageSizes_.challenge.totalBytes = serialized.size();
+        lastMessageSizes_.challenge.averageBytes =
+            static_cast<double>(serialized.size());
+        lastMessageSizes_.challenge.messageCount = 1;
     }
     if (iterCtx.generateProofsResult &&
         iterCtx.generateProofsResult->proves) {
         auto serialized = iterCtx.generateProofsResult->proves->serialize();
-        lastMessageSizes_.proofBytes = serialized.size();
+        lastMessageSizes_.proof.totalBytes = serialized.size();
+        lastMessageSizes_.proof.averageBytes =
+            static_cast<double>(serialized.size());
+        lastMessageSizes_.proof.messageCount = 1;
     }
-    // Verify request size: challenge + proof + metadata
-    lastMessageSizes_.verifyRequestBytes =
-        lastMessageSizes_.challengeBytes + lastMessageSizes_.proofBytes;
 
     return lastDetected_;
 }
@@ -419,6 +413,15 @@ bool PdpAuditScenario::runIteration()
 StageTimings PdpAuditScenario::getSetupTimings() const
 {
     return ctx_.setupTimings;
+}
+
+// ==================================================================
+// PdpAuditScenario — getSetupMessageSizes
+// ==================================================================
+
+MessageSizes PdpAuditScenario::getSetupMessageSizes() const
+{
+    return ctx_.setupMessageSizes;
 }
 
 // ==================================================================
@@ -477,6 +480,7 @@ void PdpAuditScenario::teardown()
     ctx_.stateStore.reset();
     ctx_.userId.clear();
     ctx_.fileId.clear();
+    ctx_.setupMessageSizes = MessageSizes{};
 
     lastDetected_ = false;
     lastTimings_ = StageTimings{};

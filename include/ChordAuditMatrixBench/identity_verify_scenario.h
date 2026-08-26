@@ -27,14 +27,11 @@
  *          Both Online and Offline algorithms use the common
  *          IdentitySigningAlgorithm::aggregate(AggregateRequest) operation.
  *          Online requests carry the session string used while signing;
- *          Offline requests leave it empty. The same labeled sample flow
- *          measures aggregation and aggregate verification for both tiers.
- *          Pipeline:
+ *          Offline requests leave it empty. Pipeline:
  *          1. setup(): kind dispatch (Online/Offline) → create manager →
- *             generate master key → derive user keys → generate labeled
- *             aggregate samples
- *          2. runIteration(): aggregate and verify every sample → count
- *             TP/FP/TN/FN → compute accuracy rate
+ *             generate master key → derive user keys.
+ *          2. runIteration(): generate fresh labeled samples, aggregate and
+ *             verify every sample → count TP/FP/TN/FN → compute accuracy rate.
  *
  * @author Dylan Liu
  * @version 2.1.0
@@ -92,9 +89,9 @@ struct IdentitySampleLabel {
 /**
  * @struct IdentityScenarioContext
  * @brief Holds all state created during setup() for identity verification
- * @details Contains the manager, master keys, per-user keys, and the labeled
- *          test sample set. All fields are populated in setup() and consumed
- *          in runIteration().
+ * @details Contains the manager, master keys, per-user keys, and setup
+ *          communication metrics. Samples are generated and consumed in
+ *          runIteration().
  */
 struct IdentityScenarioContext {
     /** @brief Identity algorithm manager instance */
@@ -116,11 +113,13 @@ struct IdentityScenarioContext {
 
     /** @brief User key map: userId → (publicKey, privateKey) */
     std::unordered_map<std::string, UserKeys> userKeys;
+    /** @brief External attacker private key used by forgery samples */
+    std::shared_ptr<CAMatrix::Identity::Core::AlgoUserPrivateParams> forgerPriv;
 
-    /** @brief Serialized user private key bytes (KeyGen stage communication; measured at setup) */
-    std::size_t userKeyBytes = 0;
+    /** @brief Setup-phase communication metrics */
+    MessageSizes setupMessageSizes;
 
-    /** @brief Labeled test sample set (positive + negative) */
+    /** @brief Labeled test samples generated for the current iteration */
     std::vector<IdentitySampleLabel> testSamples;
 
     /** @brief Setup stage timing measurements */
@@ -164,9 +163,8 @@ public:
     /// @brief Returns the algorithm type string
     /// @return Algorithm type identifier
     std::string algorithmType() const override { return algorithmType_; }
-
     /**
-     * @brief One-time setup: create manager, generate keys, build test samples
+     * @brief One-time setup: initialize the algorithm and derive master/user keys
      * @param config Benchmark configuration (numUsers, samplesPerIteration, negativeSamples)
      * @throws std::invalid_argument if algorithmType is unknown
      * @throws std::runtime_error if kind() and dynamic_cast disagree on the
@@ -196,6 +194,9 @@ public:
     /// @brief Returns setup stage timings
     /// @return Setup-stage timings
     StageTimings getSetupTimings() const override;
+    /// @brief Returns setup-phase communication metrics
+    /// @return Setup message metrics
+    MessageSizes getSetupMessageSizes() const override;
 
     /// @brief Returns timings from the most recent runIteration()
     /// @return Per-stage timings from the last iteration
@@ -240,7 +241,6 @@ private:
     bool isOnline_ = false;             ///< Whether the algorithm derives from OnlineIdentitySigningAlgorithm
     std::shared_ptr<CAMatrix::Identity::Core::OnlineIdentitySigningAlgorithm>
         onlineAlgo_;                    ///< Online tier handle (nullptr for offline algorithms)
-    std::size_t sessionCounter_ = 0;    ///< Internal session counter for makeSessionString (NOT a CLI parameter)
 
     // ── Last iteration results ──
     double lastAccuracyRate_ = 0; /**< Accuracy rate from last iteration */
@@ -260,12 +260,10 @@ private:
      */
     std::vector<IdentitySampleLabel> generateTestSamples(
         const IdentityConfig& config);
-
     /**
-     * @brief Create a unique bench session string
-     * @details sessionId = "bench-" + internal incrementing counter,
-     *          context = "IdentityVerify". Guarantees cross-session
-     *          uniqueness (a signer signs at most once per session).
+     * @brief Create a fresh random UUID-v4-like bench session string
+     * @details The session identifier is canonical 36-character text and is
+     *          passed to makeSessionString() with context "IdentityVerify".
      * @return Session string from onlineAlgo_->makeSessionString()
      */
     std::string makeBenchSessionString();

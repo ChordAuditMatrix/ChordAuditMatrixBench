@@ -33,10 +33,8 @@
 
 #include <ChordAuditMatrixBench/benchmark_types.h>
 
-#include <algorithm>
 #include <cstddef>
-#include <numeric>
-#include <vector>
+#include <string>
 
 namespace CAMatrix::Audit::Benchmark {
 
@@ -60,7 +58,7 @@ public:
      */
     void recordOutcome(bool detected, const std::string& /*reason*/)
     {
-        ++iterations_;  // every recordOutcome() corresponds to one PDP iteration
+        ++iterations_;
         if (detected) {
             ++detections_;
         }
@@ -72,7 +70,6 @@ public:
      * @brief Record the outcome of a single identity verification sample
      * @param accepted Whether the signature was accepted by the verifier
      * @param groundTruth Whether the signature should have been accepted
-     * @details Increments the appropriate TP/FP/TN/FN counter.
      */
     void recordIdentityOutcome(bool accepted, bool groundTruth)
     {
@@ -88,7 +85,7 @@ public:
         }
     }
 
-    // ── Setup timings ──
+    // ── Setup metrics ──
 
     /**
      * @brief Record the one-time setup stage timings
@@ -96,37 +93,59 @@ public:
      */
     void recordSetupTimings(const StageTimings& timings)
     {
+        if (setupTimingsRecorded_) {
+            return;
+        }
         setupTimings_ = timings;
+        normalize(setupTimings_);
+        setupTimingsRecorded_ = true;
     }
 
-    // ── Per-iteration timings ──
+    /**
+     * @brief Record the one-time setup communication metrics
+     * @param sizes Setup-stage serialized message measurements to store
+     */
+    void recordSetupMessageSizes(const MessageSizes& sizes)
+    {
+        if (setupMessageSizesRecorded_) {
+            return;
+        }
+        setupMessageSizes_ = sizes;
+        normalize(setupMessageSizes_);
+        setupMessageSizesRecorded_ = true;
+    }
+
+    // ── Per-iteration metrics ──
 
     /**
-     * @brief Record stage timings for a single iteration
-     * @param timings Per-stage timing measurements from one iteration
+     * @brief Add stage timings from one iteration
+     * @param timings Per-iteration timing measurements
      */
     void recordTimings(const StageTimings& timings)
     {
-        genChallengesMs_.push_back(timings.genChallengesMs);
-        genProofsMs_.push_back(timings.genProofsMs);
-        verifyProofsMs_.push_back(timings.verifyProofsMs);
-        signMs_.push_back(timings.signMs);
-        aggregateVerifyMs_.push_back(timings.aggregateVerifyMs);
-        aggregateMs_.push_back(timings.aggregateMs);
-        maintainMs_.push_back(timings.maintainMs);
+        add(iterationTimings_.initAlgorithm, timings.initAlgorithm);
+        add(iterationTimings_.generateKeys, timings.generateKeys);
+        add(iterationTimings_.generateTags, timings.generateTags);
+        add(iterationTimings_.generateChallenges, timings.generateChallenges);
+        add(iterationTimings_.generateProofs, timings.generateProofs);
+        add(iterationTimings_.verifyProofs, timings.verifyProofs);
+        add(iterationTimings_.sign, timings.sign);
+        add(iterationTimings_.aggregateVerify, timings.aggregateVerify);
+        add(iterationTimings_.aggregate, timings.aggregate);
+        add(iterationTimings_.maintain, timings.maintain);
     }
 
-    // ── Message sizes ──
-
     /**
-     * @brief Record message sizes from an iteration (first non-zero sample wins)
-     * @param sizes Serialized message sizes from one iteration
+     * @brief Add communication metrics from one iteration
+     * @param sizes Per-iteration serialized message measurements
      */
     void recordMessageSizes(const MessageSizes& sizes)
     {
-        if (messageSizes_.challengeBytes == 0 && messageSizes_.signatureBytes == 0) {
-            messageSizes_ = sizes;
-        }
+        add(iterationMessageSizes_.challenge, sizes.challenge);
+        add(iterationMessageSizes_.proof, sizes.proof);
+        add(iterationMessageSizes_.keyGeneration, sizes.keyGeneration);
+        add(iterationMessageSizes_.signing, sizes.signing);
+        add(iterationMessageSizes_.verification, sizes.verification);
     }
 
     /**
@@ -138,13 +157,10 @@ public:
         memoryPeakBytes_ = bytes;
     }
 
-    // ── Scenario-specific result fillers (called by Scenario::computeResult) ──
+    // ── Scenario-specific result fillers ──
 
     /**
-     * @brief Fill a PdpAuditResult with PDP-specific + common metrics
-     * @details Called by PdpAuditScenario::computeResult(). Populates
-     *          totalBlocks/corruptedBlocks/sampleSize/maintenanceOps from config,
-     *          detections/confidenceRate from counters, then common metrics.
+     * @brief Fill a PdpAuditResult with PDP-specific and common metrics
      * @param result [OUT] PDP result to populate
      * @param config PDP configuration used for the run
      */
@@ -161,8 +177,7 @@ public:
     }
 
     /**
-     * @brief Fill an IdentityResult with identity-specific + common metrics
-     * @details Called by IdentityVerifyScenario::computeResult().
+     * @brief Fill an IdentityResult with identity-specific and common metrics
      * @param result [OUT] Identity result to populate
      * @param config Identity configuration used for the run
      */
@@ -195,113 +210,95 @@ public:
         trueRejects_ = 0;
         falseRejects_ = 0;
         setupTimings_ = StageTimings{};
-        genChallengesMs_.clear();
-        genProofsMs_.clear();
-        verifyProofsMs_.clear();
-        signMs_.clear();
-        aggregateVerifyMs_.clear();
-        aggregateMs_.clear();
-        maintainMs_.clear();
-        messageSizes_ = MessageSizes{};
+        iterationTimings_ = StageTimings{};
+        setupMessageSizes_ = MessageSizes{};
+        iterationMessageSizes_ = MessageSizes{};
+        setupTimingsRecorded_ = false;
+        setupMessageSizesRecorded_ = false;
         memoryPeakBytes_ = 0;
     }
 
 private:
     // ── PDP audit counters ──
-    std::size_t iterations_ = 0; /**< Total PDP audit iterations (= detections + non-detections) */
-    std::size_t detections_ = 0; /**< PDP iterations that detected corruption */
+    std::size_t iterations_ = 0;
+    std::size_t detections_ = 0;
 
     // ── Identity verification counters ──
-    std::size_t totalVerifySamples_ = 0; /**< Total identity samples verified */
-    std::size_t trueAccepts_ = 0; /**< True accepts (TP) */
-    std::size_t falseAccepts_ = 0; /**< False accepts (FP) */
-    std::size_t trueRejects_ = 0; /**< True rejects (TN) */
-    std::size_t falseRejects_ = 0; /**< False rejects (FN) */
+    std::size_t totalVerifySamples_ = 0;
+    std::size_t trueAccepts_ = 0;
+    std::size_t falseAccepts_ = 0;
+    std::size_t trueRejects_ = 0;
+    std::size_t falseRejects_ = 0;
 
-    // ── Setup timings (one-time) ──
-    StageTimings setupTimings_; /**< One-time setup-stage timings */
+    // ── Setup metrics (one-time) ──
+    StageTimings setupTimings_;
+    MessageSizes setupMessageSizes_;
+    bool setupTimingsRecorded_ = false;
+    bool setupMessageSizesRecorded_ = false;
 
-    // ── Per-iteration timing vectors ──
-    std::vector<double> genChallengesMs_; /**< Per-iteration challenge-generation times */
-    std::vector<double> genProofsMs_; /**< Per-iteration proof-generation times */
-    std::vector<double> verifyProofsMs_; /**< Per-iteration proof-verification times */
-    std::vector<double> signMs_; /**< Per-iteration individual signing times */
-    std::vector<double> aggregateVerifyMs_; /**< Per-iteration aggregate-verification times */
-    std::vector<double> aggregateMs_; /**< Per-iteration Aggregate operation times */
-    std::vector<double> maintainMs_; /**< Per-iteration dynamic-PDP maintenance times */
+    // ── Per-iteration metrics ──
+    StageTimings iterationTimings_;
+    MessageSizes iterationMessageSizes_;
 
-    // ── Message sizes ──
-    MessageSizes messageSizes_; /**< First recorded message sizes */
-    std::size_t memoryPeakBytes_ = 0; /**< Peak memory usage in bytes */
+    std::size_t memoryPeakBytes_ = 0;
 
-    // ── Helpers ──
-
-    static double avg(const std::vector<double>& values)
+    static void normalize(TimingMetric& metric)
     {
-        if (values.empty()) return 0.0;
-        return std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+        metric.averageMs = (metric.callCount > 0)
+            ? metric.totalMs / static_cast<double>(metric.callCount) : 0.0;
     }
 
-    static double minVal(const std::vector<double>& values)
+    static void normalize(MessageMetric& metric)
     {
-        if (values.empty()) return 0.0;
-        return *std::min_element(values.begin(), values.end());
+        metric.averageBytes = (metric.messageCount > 0)
+            ? static_cast<double>(metric.totalBytes)
+              / static_cast<double>(metric.messageCount) : 0.0;
     }
 
-    static double maxVal(const std::vector<double>& values)
+    static void normalize(StageTimings& timings)
     {
-        if (values.empty()) return 0.0;
-        return *std::max_element(values.begin(), values.end());
+        normalize(timings.initAlgorithm);
+        normalize(timings.generateKeys);
+        normalize(timings.generateTags);
+        normalize(timings.generateChallenges);
+        normalize(timings.generateProofs);
+        normalize(timings.verifyProofs);
+        normalize(timings.sign);
+        normalize(timings.aggregateVerify);
+        normalize(timings.aggregate);
+        normalize(timings.maintain);
     }
 
-    StageTimings computeAvgTimings() const
+    static void normalize(MessageSizes& sizes)
     {
-        StageTimings t;
-        t.genChallengesMs = avg(genChallengesMs_);
-        t.genProofsMs = avg(genProofsMs_);
-        t.verifyProofsMs = avg(verifyProofsMs_);
-        t.signMs = avg(signMs_);
-        t.aggregateVerifyMs = avg(aggregateVerifyMs_);
-        t.aggregateMs = avg(aggregateMs_);
-        t.maintainMs = avg(maintainMs_);
-        return t;
+        normalize(sizes.challenge);
+        normalize(sizes.proof);
+        normalize(sizes.keyGeneration);
+        normalize(sizes.signing);
+        normalize(sizes.verification);
     }
 
-    StageTimings computeMinTimings() const
+    static void add(TimingMetric& total, const TimingMetric& sample)
     {
-        StageTimings t;
-        t.genChallengesMs = minVal(genChallengesMs_);
-        t.genProofsMs = minVal(genProofsMs_);
-        t.verifyProofsMs = minVal(verifyProofsMs_);
-        t.signMs = minVal(signMs_);
-        t.aggregateVerifyMs = minVal(aggregateVerifyMs_);
-        t.aggregateMs = minVal(aggregateMs_);
-        t.maintainMs = minVal(maintainMs_);
-        return t;
+        total.totalMs += sample.totalMs;
+        total.callCount += sample.callCount;
+        normalize(total);
     }
 
-    StageTimings computeMaxTimings() const
+    static void add(MessageMetric& total, const MessageMetric& sample)
     {
-        StageTimings t;
-        t.genChallengesMs = maxVal(genChallengesMs_);
-        t.genProofsMs = maxVal(genProofsMs_);
-        t.verifyProofsMs = maxVal(verifyProofsMs_);
-        t.signMs = maxVal(signMs_);
-        t.aggregateVerifyMs = maxVal(aggregateVerifyMs_);
-        t.aggregateMs = maxVal(aggregateMs_);
-        t.maintainMs = maxVal(maintainMs_);
-        return t;
+        total.totalBytes += sample.totalBytes;
+        total.messageCount += sample.messageCount;
+        normalize(total);
     }
 
-    /// Fill common metrics shared by all result types
     void fillCommonMetrics(BenchmarkResult& result, const BenchmarkConfig& config) const
     {
         result.iterations = config.iterations;
         result.setupTimings = setupTimings_;
-        result.avgTimings = computeAvgTimings();
-        result.minTimings = computeMinTimings();
-        result.maxTimings = computeMaxTimings();
-        result.messageSizes = messageSizes_;
+        result.iterationTimings = iterationTimings_;
+        result.setupMessageSizes = setupMessageSizes_;
+        result.iterationMessageSizes = iterationMessageSizes_;
         result.memoryPeakBytes = memoryPeakBytes_;
     }
 };

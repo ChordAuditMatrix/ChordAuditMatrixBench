@@ -22,9 +22,8 @@
  *          PdpFixedRatioReport, PdpInverseConfidenceReport, IdentityReport.
  *          All fields are read from the typed result pointers extracted by
  *          the PdpReportBase / IdentityReport constructors. IdentityReport
- *          additionally reports the online tier: algorithmKind, aggregate
- *          signers n, the aggregation-stage timing (aggregateMs), the
- *          aggregate signature bytes (ONA record) and rejected aggregations.
+ *          additionally reports the online tier, aggregation-stage timing,
+ *          aggregate signature communication, and rejected aggregations.
  * @author Dylan Liu
  * @version 4.1.0
  * @date 2026-08-25
@@ -62,7 +61,50 @@ std::string pdpBanner(const std::string& algorithmType, const char* title)
     return oss.str();
 }
 
-/// Common PDP performance-summary block (setup/iteration timings + message sizes)
+/// Format one timing metric for console output.
+std::string timingSummary(const TimingMetric& metric)
+{
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2)
+        << metric.totalMs << " ms total, "
+        << metric.averageMs << " ms avg ("
+        << metric.callCount << " calls)";
+    return oss.str();
+}
+
+/// Format one communication metric for console output.
+std::string messageSummary(const MessageMetric& metric)
+{
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2)
+        << metric.totalBytes << " bytes total, "
+        << metric.averageBytes << " bytes avg ("
+        << metric.messageCount << " messages)";
+    return oss.str();
+}
+
+/// Format one timing metric as JSON.
+std::string timingMetricJson(const TimingMetric& metric)
+{
+    std::ostringstream oss;
+    oss << "{\"totalMs\":" << metric.totalMs
+        << ",\"averageMs\":" << metric.averageMs
+        << ",\"callCount\":" << metric.callCount << "}";
+    return oss.str();
+}
+
+/// Format one communication metric as JSON.
+std::string messageMetricJson(const MessageMetric& metric)
+{
+    std::ostringstream oss;
+    oss << "{\"totalBytes\":" << metric.totalBytes
+        << ",\"averageBytes\":" << metric.averageBytes
+        << ",\"messageCount\":" << metric.messageCount << "}";
+    return oss.str();
+}
+
+
+/// Common PDP performance-summary block (setup/iteration metrics + message sizes)
 std::string pdpPerformanceSummary(const PdpAuditResult& r)
 {
     std::ostringstream oss;
@@ -70,24 +112,21 @@ std::string pdpPerformanceSummary(const PdpAuditResult& r)
         << " t=" << r.corruptedBlocks
         << " r=" << r.sampleSize << ":\n";
     oss << "    Setup (one-time):\n";
-    oss << "      Init algorithm:   " << std::fixed << std::setprecision(2)
-        << r.setupTimings.initAlgoMs << " ms\n";
-    oss << "      Key generation:   " << r.setupTimings.genKeysMs << " ms\n";
-    oss << "      Tag generation:   " << r.setupTimings.genTagsMs << " ms\n";
-    oss << "    Per-iteration (avg / min / max):\n";
-    oss << "      Challenge gen:    " << r.avgTimings.genChallengesMs
-        << " / " << r.minTimings.genChallengesMs
-        << " / " << r.maxTimings.genChallengesMs << " ms\n";
-    oss << "      Proof gen:        " << r.avgTimings.genProofsMs
-        << " / " << r.minTimings.genProofsMs
-        << " / " << r.maxTimings.genProofsMs << " ms\n";
-    oss << "      Verification:     " << r.avgTimings.verifyProofsMs
-        << " / " << r.minTimings.verifyProofsMs
-        << " / " << r.maxTimings.verifyProofsMs << " ms\n";
-    if (r.messageSizes.challengeBytes > 0 || r.messageSizes.proofBytes > 0) {
-        oss << "    Message sizes:\n";
-        oss << "      Challenge:        " << r.messageSizes.challengeBytes << " bytes\n";
-        oss << "      Proof:            " << r.messageSizes.proofBytes << " bytes\n";
+    oss << "      Init algorithm:   " << timingSummary(r.setupTimings.initAlgorithm) << "\n";
+    oss << "      Key generation:   " << timingSummary(r.setupTimings.generateKeys) << "\n";
+    oss << "      Tag generation:   " << timingSummary(r.setupTimings.generateTags) << "\n";
+    if (r.setupTimings.maintain.callCount > 0) {
+        oss << "      Maintenance:      " << timingSummary(r.setupTimings.maintain) << "\n";
+    }
+    oss << "    Iteration totals:\n";
+    oss << "      Challenge gen:    " << timingSummary(r.iterationTimings.generateChallenges) << "\n";
+    oss << "      Proof gen:        " << timingSummary(r.iterationTimings.generateProofs) << "\n";
+    oss << "      Verification:     " << timingSummary(r.iterationTimings.verifyProofs) << "\n";
+    if (r.iterationMessageSizes.challenge.messageCount > 0
+        || r.iterationMessageSizes.proof.messageCount > 0) {
+        oss << "    Iteration message sizes:\n";
+        oss << "      Challenge:        " << messageSummary(r.iterationMessageSizes.challenge) << "\n";
+        oss << "      Proof:            " << messageSummary(r.iterationMessageSizes.proof) << "\n";
     }
     return oss.str();
 }
@@ -96,29 +135,24 @@ std::string pdpPerformanceSummary(const PdpAuditResult& r)
 std::string pdpCommonJson(const PdpAuditResult& r, const std::string& indent)
 {
     std::ostringstream oss;
-    oss << indent << "  \"setupTimingsMs\": {\n";
-    oss << indent << "    \"initAlgorithm\": " << r.setupTimings.initAlgoMs << ",\n";
-    oss << indent << "    \"generateKeys\": " << r.setupTimings.genKeysMs << ",\n";
-    oss << indent << "    \"generateTags\": " << r.setupTimings.genTagsMs << "\n";
+    oss << indent << "  \"setupTimings\": {\n";
+    oss << indent << "    \"initAlgorithm\": " << timingMetricJson(r.setupTimings.initAlgorithm) << ",\n";
+    oss << indent << "    \"generateKeys\": " << timingMetricJson(r.setupTimings.generateKeys) << ",\n";
+    oss << indent << "    \"generateTags\": " << timingMetricJson(r.setupTimings.generateTags) << ",\n";
+    oss << indent << "    \"maintain\": " << timingMetricJson(r.setupTimings.maintain) << "\n";
     oss << indent << "  },\n";
-    oss << indent << "  \"avgTimingsMs\": {\n";
-    oss << indent << "    \"generateChallenges\": " << r.avgTimings.genChallengesMs << ",\n";
-    oss << indent << "    \"generateProofs\": " << r.avgTimings.genProofsMs << ",\n";
-    oss << indent << "    \"verifyProofs\": " << r.avgTimings.verifyProofsMs << "\n";
+    oss << indent << "  \"iterationTimings\": {\n";
+    oss << indent << "    \"generateChallenges\": " << timingMetricJson(r.iterationTimings.generateChallenges) << ",\n";
+    oss << indent << "    \"generateProofs\": " << timingMetricJson(r.iterationTimings.generateProofs) << ",\n";
+    oss << indent << "    \"verifyProofs\": " << timingMetricJson(r.iterationTimings.verifyProofs) << "\n";
     oss << indent << "  },\n";
-    oss << indent << "  \"minTimingsMs\": {\n";
-    oss << indent << "    \"generateChallenges\": " << r.minTimings.genChallengesMs << ",\n";
-    oss << indent << "    \"generateProofs\": " << r.minTimings.genProofsMs << ",\n";
-    oss << indent << "    \"verifyProofs\": " << r.minTimings.verifyProofsMs << "\n";
+    oss << indent << "  \"setupMessageSizes\": {\n";
+    oss << indent << "    \"challenge\": " << messageMetricJson(r.setupMessageSizes.challenge) << ",\n";
+    oss << indent << "    \"proof\": " << messageMetricJson(r.setupMessageSizes.proof) << "\n";
     oss << indent << "  },\n";
-    oss << indent << "  \"maxTimingsMs\": {\n";
-    oss << indent << "    \"generateChallenges\": " << r.maxTimings.genChallengesMs << ",\n";
-    oss << indent << "    \"generateProofs\": " << r.maxTimings.genProofsMs << ",\n";
-    oss << indent << "    \"verifyProofs\": " << r.maxTimings.verifyProofsMs << "\n";
-    oss << indent << "  },\n";
-    oss << indent << "  \"messageSizes\": {\n";
-    oss << indent << "    \"challengeBytes\": " << r.messageSizes.challengeBytes << ",\n";
-    oss << indent << "    \"proofBytes\": " << r.messageSizes.proofBytes << "\n";
+    oss << indent << "  \"iterationMessageSizes\": {\n";
+    oss << indent << "    \"challenge\": " << messageMetricJson(r.iterationMessageSizes.challenge) << ",\n";
+    oss << indent << "    \"proof\": " << messageMetricJson(r.iterationMessageSizes.proof) << "\n";
     oss << indent << "  },\n";
     oss << indent << "  \"memoryPeakBytes\": " << r.memoryPeakBytes << "\n";
     return oss.str();
@@ -400,7 +434,7 @@ std::string IdentityReport::toConsole() const
     oss << "  Users             — Enrolled users\n";
     oss << "  Samples/Iter      — Verification samples per iteration\n";
     oss << "  Accuracy Rate     — (TP + TN) / total\n";
-    oss << "  TP/FP/TN/FN        — True/false accepts/rejects\n\n";
+    oss << "  TP/FP/TN/FN       — True/false accepts/rejects\n\n";
 
     oss << std::left
         << std::setw(8)  << "Users"
@@ -435,29 +469,23 @@ std::string IdentityReport::toConsole() const
         oss << "  Users=" << r->numUsers
             << " Samples=" << r->totalVerifySamples << ":\n";
         oss << "    Setup (one-time):\n";
-        oss << "      Init algorithm:   " << std::fixed << std::setprecision(2)
-            << r->setupTimings.initAlgoMs << " ms\n";
-        oss << "      Key generation:   " << r->setupTimings.genKeysMs << " ms\n";
-        oss << "    Per-iteration (avg / min / max):\n";
-        oss << "      Sign:             " << r->avgTimings.signMs
-            << " / " << r->minTimings.signMs
-            << " / " << r->maxTimings.signMs << " ms\n";
-        if (r->avgTimings.aggregateMs > 0) {
-            oss << "      Aggregate:        " << r->avgTimings.aggregateMs
-                << " / " << r->minTimings.aggregateMs
-                << " / " << r->maxTimings.aggregateMs << " ms\n";
+        oss << "      Init algorithm:   " << timingSummary(r->setupTimings.initAlgorithm) << "\n";
+        oss << "      Key generation:   " << timingSummary(r->setupTimings.generateKeys) << "\n";
+        oss << "    Iteration totals:\n";
+        oss << "      Sign:             " << timingSummary(r->iterationTimings.sign) << "\n";
+        if (r->iterationTimings.aggregate.callCount > 0) {
+            oss << "      Aggregate:        " << timingSummary(r->iterationTimings.aggregate) << "\n";
         }
-        oss << "      Aggregate verify: " << r->avgTimings.aggregateVerifyMs
-            << " / " << r->minTimings.aggregateVerifyMs
-            << " / " << r->maxTimings.aggregateVerifyMs << " ms\n";
-        if (r->messageSizes.signatureBytes > 0 || r->messageSizes.verifyRequestBytes > 0
-            || r->messageSizes.aggregateSignatureBytes > 0) {
-            oss << "    Message sizes:\n";
-            oss << "      Signature:        " << r->messageSizes.signatureBytes << " bytes\n";
-            oss << "      Verify request:   " << r->messageSizes.verifyRequestBytes << " bytes\n";
-            if (r->messageSizes.aggregateSignatureBytes > 0) {
-                oss << "      Aggregate sig:    " << r->messageSizes.aggregateSignatureBytes << " bytes\n";
-            }
+        oss << "      Aggregate verify: " << timingSummary(r->iterationTimings.aggregateVerify) << "\n";
+        if (r->setupMessageSizes.keyGeneration.messageCount > 0) {
+            oss << "    Setup message sizes:\n";
+            oss << "      Key generation:   " << messageSummary(r->setupMessageSizes.keyGeneration) << "\n";
+        }
+        if (r->iterationMessageSizes.signing.messageCount > 0
+            || r->iterationMessageSizes.verification.messageCount > 0) {
+            oss << "    Iteration message sizes:\n";
+            oss << "      Signing:          " << messageSummary(r->iterationMessageSizes.signing) << "\n";
+            oss << "      Verification:     " << messageSummary(r->iterationMessageSizes.verification) << "\n";
         }
         oss << "    Confusion Matrix:\n";
         oss << "                    Predicted Accept  Predicted Reject\n";
@@ -492,30 +520,21 @@ std::string IdentityReport::toJson() const
         oss << "      \"falseAccepts\": " << r->falseAccepts << ",\n";
         oss << "      \"trueRejects\": " << r->trueRejects << ",\n";
         oss << "      \"falseRejects\": " << r->falseRejects << ",\n";
-        oss << "      \"setupTimingsMs\": {\n";
-        oss << "        \"initAlgorithm\": " << r->setupTimings.initAlgoMs << ",\n";
-        oss << "        \"generateKeys\": " << r->setupTimings.genKeysMs << "\n";
+        oss << "      \"setupTimings\": {\n";
+        oss << "        \"initAlgorithm\": " << timingMetricJson(r->setupTimings.initAlgorithm) << ",\n";
+        oss << "        \"generateKeys\": " << timingMetricJson(r->setupTimings.generateKeys) << "\n";
         oss << "      },\n";
-        oss << "      \"avgTimingsMs\": {\n";
-        oss << "        \"sign\": " << r->avgTimings.signMs << ",\n";
-        oss << "        \"aggregate\": " << r->avgTimings.aggregateMs << ",\n";
-        oss << "        \"aggregateVerify\": " << r->avgTimings.aggregateVerifyMs << "\n";
+        oss << "      \"iterationTimings\": {\n";
+        oss << "        \"sign\": " << timingMetricJson(r->iterationTimings.sign) << ",\n";
+        oss << "        \"aggregate\": " << timingMetricJson(r->iterationTimings.aggregate) << ",\n";
+        oss << "        \"aggregateVerify\": " << timingMetricJson(r->iterationTimings.aggregateVerify) << "\n";
         oss << "      },\n";
-        oss << "      \"minTimingsMs\": {\n";
-        oss << "        \"sign\": " << r->minTimings.signMs << ",\n";
-        oss << "        \"aggregate\": " << r->minTimings.aggregateMs << ",\n";
-        oss << "        \"aggregateVerify\": " << r->minTimings.aggregateVerifyMs << "\n";
+        oss << "      \"setupMessageSizes\": {\n";
+        oss << "        \"keyGeneration\": " << messageMetricJson(r->setupMessageSizes.keyGeneration) << "\n";
         oss << "      },\n";
-        oss << "      \"maxTimingsMs\": {\n";
-        oss << "        \"sign\": " << r->maxTimings.signMs << ",\n";
-        oss << "        \"aggregate\": " << r->maxTimings.aggregateMs << ",\n";
-        oss << "        \"aggregateVerify\": " << r->maxTimings.aggregateVerifyMs << "\n";
-        oss << "      },\n";
-        oss << "      \"messageSizes\": {\n";
-        oss << "        \"userKeyBytes\": " << r->messageSizes.userKeyBytes << ",\n";
-        oss << "        \"signatureBytes\": " << r->messageSizes.signatureBytes << ",\n";
-        oss << "        \"verifyRequestBytes\": " << r->messageSizes.verifyRequestBytes << ",\n";
-        oss << "        \"aggregateSignatureBytes\": " << r->messageSizes.aggregateSignatureBytes << "\n";
+        oss << "      \"iterationMessageSizes\": {\n";
+        oss << "        \"signing\": " << messageMetricJson(r->iterationMessageSizes.signing) << ",\n";
+        oss << "        \"verification\": " << messageMetricJson(r->iterationMessageSizes.verification) << "\n";
         oss << "      },\n";
         oss << "      \"memoryPeakBytes\": " << r->memoryPeakBytes << "\n";
         oss << "    }";

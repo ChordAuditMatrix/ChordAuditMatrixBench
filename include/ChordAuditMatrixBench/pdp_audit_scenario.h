@@ -95,6 +95,7 @@ struct PdpScenarioContext {
     std::string fileId; /**< File identifier for audit operations */
 
     StageTimings setupTimings; /**< One-time setup stage timings */
+    MessageSizes setupMessageSizes; /**< One-time setup communication metrics */
 
     // --- Dynamic PDP state ---
     CAMatrix::Audit::Core::StrategyKind strategyKind; /**< Cached strategy kind for O(1) dispatch */
@@ -171,6 +172,9 @@ public:
     /// @brief Returns setup stage timings
     /// @return Setup-stage timings
     StageTimings getSetupTimings() const override;
+    /// @brief Returns setup-phase communication metrics
+    /// @return Setup message metrics
+    MessageSizes getSetupMessageSizes() const override;
     /// @brief Returns timings from the most recent runIteration()
     /// @return Per-stage timings from the last iteration
     StageTimings getLastTimings() const override;

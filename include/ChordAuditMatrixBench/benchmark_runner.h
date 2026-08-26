@@ -77,7 +77,7 @@ public:
         // Step 1: Setup — create engine, generate keys/tags or user keys
         scenario_->setup(config);                           // virtual
         collector.recordSetupTimings(scenario_->getSetupTimings());
-
+        collector.recordSetupMessageSizes(scenario_->getSetupMessageSizes());
         // Step 2: Pre-iteration preparation (PDP: corruption; Identity: noop)
         scenario_->prepare(config);                        // virtual
 

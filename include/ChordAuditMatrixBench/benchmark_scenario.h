@@ -118,6 +118,10 @@ public:
      * @brief Get the timings from the most recent setup() call
      */
     virtual StageTimings getSetupTimings() const = 0;
+    /**
+     * @brief Get the communication metrics from the most recent setup() call
+     */
+    virtual MessageSizes getSetupMessageSizes() const = 0;
 
     /**
      * @brief Get the timings from the most recent runIteration() call
