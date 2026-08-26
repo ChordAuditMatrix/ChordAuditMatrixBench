@@ -144,7 +144,7 @@ struct StageTimings {
     // --- Identity verification stages (0 for PDP) ---
     double signMs = 0; /**< Individual signing time */
     double aggregateVerifyMs = 0; /**< Aggregate verification time */
-    double aggregateMs = 0; /**< Aggregation stage timing (online aggregateSessionSignatures) */
+    double aggregateMs = 0; /**< Aggregation stage timing for Online and Offline algorithms */
 
     // --- Dynamic PDP stages (0 for static PDP) ---
     double maintainMs = 0; /**< Dynamic PDP maintenance (Update/Insert/Delete) time */
@@ -166,7 +166,7 @@ struct MessageSizes {
     // --- Identity verification (0 for PDP) ---
     std::size_t signatureBytes = 0; /**< Serialized signature message size */
     std::size_t verifyRequestBytes = 0; /**< Serialized verify-request message size */
-    std::size_t aggregateSignatureBytes = 0; /**< Aggregated signature bytes (ONA record, O(n) in signers) */
+    std::size_t aggregateSignatureBytes = 0; /**< Serialized aggregate signature bytes */
     std::size_t userKeyBytes = 0; /**< Serialized user private key bytes (KeyGen stage communication) */
 };
 

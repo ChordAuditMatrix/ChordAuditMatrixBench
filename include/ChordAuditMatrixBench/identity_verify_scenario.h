@@ -26,22 +26,16 @@
  *
  *          Online algorithms (derived from
  *          OnlineIdentitySigningAlgorithm) additionally exercise the
- *          session-coordinated aggregation path: setup() derives one session
- *          string per single-signature sample and one shared session string
- *          per aggregate sample (n = numUsers signers); runIteration()
- *          re-aggregates per-signer signatures (measuring aggregateMs and
- *          aggregateSignatureBytes) and aggregate-verifies legal and tampered
- *          samples. Cross-session mixing and duplicate-signer aggregation
- *          rejections are counted separately (rejectedAggregation) and never
- *          enter the TP/FP/TN/FN confusion matrix.
+ *          session-coordinated aggregation path. The number of signers is
+ *          supplied by numUsers. The same labeled sample flow measures
+ *          aggregation and aggregate verification for both algorithm tiers.
  *
  *          Pipeline:
  *          1. setup(): kind dispatch (Online/Offline) → create manager →
- *             generate master key → derive user keys → generate single-signature
- *             test samples (sign + label) + online aggregate samples
- *          2. runIteration(): loop over test samples → aggregateVerify each;
- *             online: aggregate + verify aggregate samples → count
- *             TP/FP/TN/FN + rejectedAggregation → compute accuracy rate
+ *             generate master key → derive user keys → generate labeled
+ *             aggregate samples
+ *          2. runIteration(): aggregate and verify every sample → count
+ *             TP/FP/TN/FN → compute accuracy rate
  *
  * @author Dylan Liu
  * @version 2.1.0
@@ -144,12 +138,9 @@ struct IdentityScenarioContext {
  * @details Measures verification accuracy rate (TP+TN)/(TP+FP+TN+FN) across
  *          a labeled test sample set. Supports configurable negative sample
  *          generation: forged signatures, tampered messages, and identity
- *          impersonation. Online algorithms additionally run the aggregate
- *          scenario: n = numUsers signers under one shared session string,
- *          aggregated via aggregateSessionSignatures and verified via
- *          aggregateVerify; tampered aggregates (byte flip / roster entry
- *          removal) must be rejected, cross-session mixing and duplicate
- *          signers are counted as rejected aggregations.
+ *          impersonation. Online algorithms additionally run the
+ *          session-coordinated aggregation path; Offline algorithms use their
+ *          regular aggregate() operation.
  *
  *          Usage:
  *          ```cpp
