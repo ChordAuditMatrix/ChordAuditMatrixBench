@@ -372,6 +372,9 @@ bool IdentityVerifyScenario::runIteration()
         verifyInput.emplace("masterPub", ctx_.masterPub);
         verifyInput.emplace("userIds", sample.userIds);
         verifyInput.emplace("userPubKeys", sample.userPubKeys);
+        verifyInput.emplace(std::string(
+            CAMatrix::Identity::Core::IdentityVerifyContract::kSessionString),
+            sample.sessionString);
 
         accepted = measureCall(&lastTimings_.aggregateVerify, [&]() {
             auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
