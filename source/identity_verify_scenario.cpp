@@ -294,10 +294,8 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
                     *ctx_.masterPub, *ctx_.masterPriv, "forger-external");
             });
             ctx_.forgerPriv = forgerKeys.second;
-            if (ctx_.forgerPriv) {
-                addMessage(ctx_.setupMessageSizes.keyGeneration,
-                           ctx_.forgerPriv->serialize().size());
-            }
+            // Forger is not an enrolled user — keep generateKeys timing but
+            // exclude its key bytes from setup communication metrics.
         } catch (...) {
             ctx_.forgerPriv.reset();
         }
