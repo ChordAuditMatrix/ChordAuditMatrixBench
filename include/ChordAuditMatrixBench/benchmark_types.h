@@ -186,6 +186,7 @@ struct MessageMetric {
  */
 struct MessageSizes {
     // --- PDP audit ---
+    MessageMetric tags; /**< Serialized tag-set message */
     MessageMetric challenge; /**< Serialized challenge messages */
     MessageMetric proof; /**< Serialized proof messages */
 

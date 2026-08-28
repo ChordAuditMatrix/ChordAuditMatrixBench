@@ -115,6 +115,9 @@ std::string pdpPerformanceSummary(const PdpAuditResult& r)
     oss << "      Init algorithm:   " << timingSummary(r.setupTimings.initAlgorithm) << "\n";
     oss << "      Key generation:   " << timingSummary(r.setupTimings.generateKeys) << "\n";
     oss << "      Tag generation:   " << timingSummary(r.setupTimings.generateTags) << "\n";
+    if (r.setupMessageSizes.tags.messageCount > 0) {
+        oss << "      Tag set:          " << messageSummary(r.setupMessageSizes.tags) << "\n";
+    }
     if (r.setupTimings.maintain.callCount > 0) {
         oss << "      Maintenance:      " << timingSummary(r.setupTimings.maintain) << "\n";
     }
@@ -147,6 +150,7 @@ std::string pdpCommonJson(const PdpAuditResult& r, const std::string& indent)
     oss << indent << "    \"verifyProofs\": " << timingMetricJson(r.iterationTimings.verifyProofs) << "\n";
     oss << indent << "  },\n";
     oss << indent << "  \"setupMessageSizes\": {\n";
+    oss << indent << "    \"tags\": " << messageMetricJson(r.setupMessageSizes.tags) << ",\n";
     oss << indent << "    \"challenge\": " << messageMetricJson(r.setupMessageSizes.challenge) << ",\n";
     oss << indent << "    \"proof\": " << messageMetricJson(r.setupMessageSizes.proof) << "\n";
     oss << indent << "  },\n";

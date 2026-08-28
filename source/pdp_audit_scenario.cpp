@@ -208,6 +208,13 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
         ctx_.engine->generateTags(AuditMsg::RawInput(tagsDataMap), *ctx_.opCtx);
     });
     ctx_.tags = ctx_.opCtx->generateTagsResult->tags;
+    if (ctx_.tags) {
+        const auto serialized = ctx_.tags->serialize();
+        auto& metric = ctx_.setupMessageSizes.tags;
+        metric.totalBytes = serialized.size();
+        metric.averageBytes = static_cast<double>(serialized.size());
+        metric.messageCount = 1;
+    }
 
     // Step 8 (dynamic PDP only): Perform maintenance operations
     if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic && cfg.maintenanceOps > 0) {
