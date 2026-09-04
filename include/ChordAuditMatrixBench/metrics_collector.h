@@ -24,8 +24,8 @@
  *          called by each concrete scenario's computeResult() to populate the
  *          polymorphic result hierarchy.
  * @author Dylan Liu
- * @version 4.1.0
- * @date 2026-08-25
+ * @version 4.2.0
+ * @date 2026-09-05
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_METRICS_COLLECTOR_H
@@ -33,6 +33,7 @@
 
 #include <ChordAuditMatrixBench/benchmark_types.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 
@@ -45,7 +46,9 @@ namespace CAMatrix::Audit::Benchmark {
  *          and identity verification scenarios (accuracy rate via
  *          recordIdentityOutcome). The legacy computeResult() with ResultKind
  *          dispatch has been split into fillPdpResult() / fillIdentityResult()
- *          (called by the corresponding Scenario::computeResult()).
+ *          (called by the corresponding Scenario::computeResult()). In
+ *          parallel runs each worker records into its own collector and the
+ *          runner merges them via mergeFrom() before result filling.
  */
 class MetricsCollector {
 public:
@@ -222,6 +225,56 @@ public:
         setupTimingsRecorded_ = false;
         setupMessageSizesRecorded_ = false;
         memoryPeakBytes_ = 0;
+    }
+
+    // ── Merge (parallel-run worker collectors) ──
+
+    /**
+     * @brief Merge raw metrics from a worker-local collector into this one
+     * @details Sums raw totals, call counts, byte counts, and outcome counters
+     *          (per-iteration timings, message sizes, PDP detections, identity
+     *          TP/FP/TN/FN samples). Averages are recomputed from the merged
+     *          totals here (per add), so each average is derived from the full
+     *          run rather than from averaging per-worker averages; derived
+     *          per-iteration rates are computed only at result filling time
+     *          from the config iteration count. Setup-phase metrics of the
+     *          receiving collector are kept — in a parallel run the receiver
+     *          holds worker 0's record, the representative single-setup
+     *          measurement (each worker performs its own setup, but one
+     *          setup-per-run reporting is preserved). The memory peak takes
+     *          the higher of the two values.
+     * @param other Worker-local collector to merge into this one
+     */
+    void mergeFrom(const MetricsCollector& other)
+    {
+        add(iterationTimings_.initAlgorithm, other.iterationTimings_.initAlgorithm);
+        add(iterationTimings_.generateKeys, other.iterationTimings_.generateKeys);
+        add(iterationTimings_.generateTags, other.iterationTimings_.generateTags);
+        add(iterationTimings_.generateChallenges, other.iterationTimings_.generateChallenges);
+        add(iterationTimings_.generateProofs, other.iterationTimings_.generateProofs);
+        add(iterationTimings_.verifyProofs, other.iterationTimings_.verifyProofs);
+        add(iterationTimings_.sign, other.iterationTimings_.sign);
+        add(iterationTimings_.aggregateVerify, other.iterationTimings_.aggregateVerify);
+        add(iterationTimings_.aggregate, other.iterationTimings_.aggregate);
+        add(iterationTimings_.maintain, other.iterationTimings_.maintain);
+
+        add(iterationMessageSizes_.tags, other.iterationMessageSizes_.tags);
+        add(iterationMessageSizes_.challenge, other.iterationMessageSizes_.challenge);
+        add(iterationMessageSizes_.proof, other.iterationMessageSizes_.proof);
+        add(iterationMessageSizes_.keyGeneration, other.iterationMessageSizes_.keyGeneration);
+        add(iterationMessageSizes_.signing, other.iterationMessageSizes_.signing);
+        add(iterationMessageSizes_.verification, other.iterationMessageSizes_.verification);
+
+        iterations_ += other.iterations_;
+        detections_ += other.detections_;
+        totalVerifySamples_ += other.totalVerifySamples_;
+        trueAccepts_ += other.trueAccepts_;
+        falseAccepts_ += other.falseAccepts_;
+        trueRejects_ += other.trueRejects_;
+        falseRejects_ += other.falseRejects_;
+        memoryPeakBytes_ = std::max(memoryPeakBytes_, other.memoryPeakBytes_);
+        // Setup metrics of `other` are intentionally not merged: the receiver
+        // keeps its own (worker 0) representative setup record.
     }
 
 private:

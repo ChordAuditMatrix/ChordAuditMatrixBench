@@ -111,6 +111,9 @@ std::string pdpPerformanceSummary(const PdpAuditResult& r)
     oss << "  N=" << r.totalBlocks
         << " t=" << r.corruptedBlocks
         << " r=" << r.sampleSize << ":\n";
+    oss << "    Execution:        " << r.effectiveThreads << " thread(s), requested "
+        << r.requestedThreads << ", wall " << std::fixed << std::setprecision(2)
+        << r.wallTimeMs << " ms\n";
     oss << "    Setup (one-time):\n";
     oss << "      Init algorithm:   " << timingSummary(r.setupTimings.initAlgorithm) << "\n";
     oss << "      Key generation:   " << timingSummary(r.setupTimings.generateKeys) << "\n";
@@ -158,6 +161,10 @@ std::string pdpCommonJson(const PdpAuditResult& r, const std::string& indent)
     oss << indent << "    \"challenge\": " << messageMetricJson(r.iterationMessageSizes.challenge) << ",\n";
     oss << indent << "    \"proof\": " << messageMetricJson(r.iterationMessageSizes.proof) << "\n";
     oss << indent << "  },\n";
+    oss << indent << "  \"requestedThreads\": " << r.requestedThreads << ",\n";
+    oss << indent << "  \"effectiveThreads\": " << r.effectiveThreads << ",\n";
+    oss << indent << "  \"wallTimeMs\": " << std::fixed << std::setprecision(2)
+        << r.wallTimeMs << ",\n";
     oss << indent << "  \"memoryPeakBytes\": " << r.memoryPeakBytes << "\n";
     return oss.str();
 }
@@ -474,6 +481,9 @@ std::string IdentityReport::toConsole() const
             << " Samples total=" << r->totalVerifySamples
             << " (avg/iter=" << std::fixed << std::setprecision(2)
             << r->averageVerifySamples << "):\n";
+        oss << "    Execution:        " << r->effectiveThreads << " thread(s), requested "
+            << r->requestedThreads << ", wall " << std::fixed << std::setprecision(2)
+            << r->wallTimeMs << " ms\n";
         oss << "    Setup (one-time):\n";
         oss << "      Init algorithm:   " << timingSummary(r->setupTimings.initAlgorithm) << "\n";
         oss << "      Key generation:   " << timingSummary(r->setupTimings.generateKeys) << "\n";
@@ -526,6 +536,10 @@ std::string IdentityReport::toJson() const
         oss << "      \"averageVerifySamples\": " << std::fixed << std::setprecision(2)
             << r->averageVerifySamples << ",\n";
         oss << "      \"iterations\": " << r->iterations << ",\n";
+        oss << "      \"requestedThreads\": " << r->requestedThreads << ",\n";
+        oss << "      \"effectiveThreads\": " << r->effectiveThreads << ",\n";
+        oss << "      \"wallTimeMs\": " << std::fixed << std::setprecision(2)
+            << r->wallTimeMs << ",\n";
         oss << "      \"algorithmKind\": \"" << r->algorithmKind << "\",\n";
         oss << "      \"accuracyRate\": " << std::fixed << std::setprecision(2) << r->accuracyRate << ",\n";
         oss << "      \"trueAccepts\": " << r->trueAccepts << ",\n";

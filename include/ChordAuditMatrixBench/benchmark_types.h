@@ -24,8 +24,8 @@
  *          Legacy fat structs and ResultKind/ScenarioKind/SweepMode enums have
  *          been removed in favour of an all-polymorphic pipeline.
  * @author Dylan Liu
- * @version 4.1.0
- * @date 2026-08-25
+ * @version 4.2.0
+ * @date 2026-09-05
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_TYPES_H
@@ -96,6 +96,7 @@ public:
     virtual ~BenchmarkConfig() = default;
 
     std::size_t iterations = 100; /**< Number of iterations — Runner loop */
+    std::size_t threads = 1; /**< Requested worker threads — Runner parallel split (0 = auto: std::thread::hardware_concurrency, fallback 1) */
     bool usePseudoRandom = false; /**< PRNG switch — read by all Scenario::setup() */
     std::uint64_t seed = 0; /**< PRNG seed — read by all Scenario::setup() */
 };
@@ -226,6 +227,9 @@ public:
 
     std::string algorithmType; /**< Algorithm identifier */
     std::size_t iterations = 0; /**< Iterations performed */
+    std::size_t requestedThreads = 1; /**< Resolved thread request (0 → std::thread::hardware_concurrency, fallback 1) */
+    std::size_t effectiveThreads = 1; /**< Threads actually used — ≤ iterations; forced to 1 when the scenario cannot partition */
+    double wallTimeMs = 0.0; /**< End-to-end wall time of the benchmark run, in milliseconds */
 
     StageTimings setupTimings; /**< Setup-phase timing metrics */
     StageTimings iterationTimings; /**< Aggregated per-iteration timing metrics */

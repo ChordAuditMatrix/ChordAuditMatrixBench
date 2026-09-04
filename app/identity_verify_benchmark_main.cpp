@@ -23,19 +23,24 @@
  *          (selected by --computation, default: IdentityVerify). The strategy
  *          owns CLI parsing, sweep expansion, execution, and report generation
  *          — main holds a single base-class pointer and dispatches
- *          polymorphically.
+ *          polymorphically. The BenchmarkRunner owns a scenario factory and
+ *          creates one independent IdentityVerifyScenario per parallel worker
+ *          per run (each worker scenario retains its own std::random_device
+ *          seeded RNG and generates its own Online session strings).
  *
  *          CLI parameters (global):
  *          --algorithm <type>          Algorithm type (default: SM9Noncert)
  *          --strategy-path <dir>       Identity algorithm library directory
  *          --computation <type>        Computation strategy (default: IdentityVerify)
+ *          --iterations <N>            Iterations per combo (default: 10)
+ *          --threads <N>               Parallel worker threads (default: 1; 0 = auto)
  *          --json <path>               Write JSON report to file
  *          --list-algorithms           List identity algorithms and exit
  *          --help                      Show help message
  *          (Identity sweep parameters are parsed by IdentityVerifyStrategy.)
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.2.0
+ * @date 2026-09-05
  */
 
 #include <ChordAuditMatrixBench/benchmark_computation_strategy.h>
@@ -72,6 +77,7 @@ static void printUsage(const char* progName)
     spdlog::info("                              (default: <exe_dir>/identity_algorithms)");
     spdlog::info("  --computation <type>        Computation strategy (default: IdentityVerify)");
     spdlog::info("  --iterations <N>            Iterations per combo (default: 10)");
+    spdlog::info("  --threads <N>               Parallel worker threads (default: 1; 0 = auto: hardware_concurrency)");
     spdlog::info("  --num-users <N>             Number of users (default: 10)");
     spdlog::info("  --samples-per-iter <N>      Samples per iteration (default: 20)");
     spdlog::info("  --forgery-ratio <r>         Forgery ratio (default: 0)");
@@ -208,9 +214,12 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // ── Create identity verify scenario + runner ──
-    auto scenario = std::make_unique<IdentityVerifyScenario>(algorithmType, identityManager);
-    BenchmarkRunner runner(std::move(scenario));
+    // ── Create the benchmark runner with an identity scenario factory ──
+    // One independent scenario is created per worker per run by the runner;
+    // each worker scenario owns its RNG and generates its own Online sessions.
+    BenchmarkRunner runner(BenchmarkScenarioFactory([algorithmType, identityManager]() {
+        return std::make_unique<IdentityVerifyScenario>(algorithmType, identityManager);
+    }));
 
     // ── Factory-create the computation strategy ──
     auto strategy = createComputationStrategy(computationType);
@@ -237,7 +246,7 @@ int main(int argc, char* argv[])
     }
     spdlog::info("\n=== Benchmark Complete ===");
 
-    auto report = strategy->createReport(results, runner.algorithmType());
+    auto report = strategy->createReport(results, algorithmType);
     std::cout << report->toConsole();
 
     if (!jsonPath.empty()) {

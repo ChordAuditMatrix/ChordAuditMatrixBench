@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <spdlog/spdlog.h>
 #include <string>
 #include <utility>
@@ -83,6 +84,28 @@ std::vector<std::size_t> parseCsvSizeT(const std::string& s)
         i = j + 1;
     }
     return out;
+}
+
+/// Strictly parse a non-negative unsigned CLI integer
+/// @details Rejects signs, whitespace, trailing junk, and overflow — only
+///          bare decimal digits are accepted (used for --threads).
+bool parseStrictUnsigned(const std::string& text, std::size_t& out)
+{
+    if (text.empty()) return false;
+    for (char c : text) {
+        if (c < '0' || c > '9') return false;
+    }
+    try {
+        const unsigned long long v = std::stoull(text);
+        if (v > static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max())) {
+            return false;
+        }
+        out = static_cast<std::size_t>(v);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 /// Minimum sample size r (per N, t) to reach targetConfidence via the hypergeometric
@@ -194,6 +217,7 @@ PdpDirectStrategy::parseAndExpand(int argc, char** argv)
     // Defaults
     std::size_t totalBlocks = 1000;
     std::size_t iterations = 10;
+    std::size_t threads = 1;
     std::size_t blockSize = 256;
     std::size_t maintenanceOps = 0;
     bool usePseudoRandom = false;
@@ -209,6 +233,12 @@ PdpDirectStrategy::parseAndExpand(int argc, char** argv)
             totalBlocks = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--iterations" && i + 1 < argc) {
             iterations = static_cast<std::size_t>(std::atol(argv[++i]));
+        } else if (arg == "--threads" && i + 1 < argc) {
+            if (!parseStrictUnsigned(argv[++i], threads)) {
+                spdlog::error("Invalid --threads value '{}': expected a non-negative integer.",
+                              argv[i]);
+                return {};
+            }
         } else if (arg == "--block-size" && i + 1 < argc) {
             blockSize = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--maintenance-ops" && i + 1 < argc) {
@@ -274,6 +304,7 @@ PdpDirectStrategy::parseAndExpand(int argc, char** argv)
             cfg->blockSize = blockSize;
             cfg->maintenanceOps = maintenanceOps;
             cfg->iterations = iterations;
+            cfg->threads = threads;
             cfg->usePseudoRandom = usePseudoRandom;
             cfg->seed = seed;
             configs.push_back(std::move(cfg));
@@ -303,6 +334,7 @@ std::vector<std::unique_ptr<BenchmarkConfig>>
 PdpFixedRatioStrategy::parseAndExpand(int argc, char** argv)
 {
     std::size_t iterations = 10;
+    std::size_t threads = 1;
     std::size_t blockSize = 256;
     std::size_t maintenanceOps = 0;
     bool usePseudoRandom = false;
@@ -317,6 +349,12 @@ PdpFixedRatioStrategy::parseAndExpand(int argc, char** argv)
         std::string arg = argv[i];
         if (arg == "--iterations" && i + 1 < argc) {
             iterations = static_cast<std::size_t>(std::atol(argv[++i]));
+        } else if (arg == "--threads" && i + 1 < argc) {
+            if (!parseStrictUnsigned(argv[++i], threads)) {
+                spdlog::error("Invalid --threads value '{}': expected a non-negative integer.",
+                              argv[i]);
+                return {};
+            }
         } else if (arg == "--block-size" && i + 1 < argc) {
             blockSize = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--maintenance-ops" && i + 1 < argc) {
@@ -359,6 +397,7 @@ PdpFixedRatioStrategy::parseAndExpand(int argc, char** argv)
         cfg->blockSize = blockSize;
         cfg->maintenanceOps = maintenanceOps;
         cfg->iterations = iterations;
+        cfg->threads = threads;
         cfg->usePseudoRandom = usePseudoRandom;
         cfg->seed = seed;
         configs.push_back(std::move(cfg));
@@ -387,6 +426,7 @@ std::vector<std::unique_ptr<BenchmarkConfig>>
 PdpInverseConfidenceStrategy::parseAndExpand(int argc, char** argv)
 {
     std::size_t iterations = 10;
+    std::size_t threads = 1;
     std::size_t blockSize = 256;
     std::size_t maintenanceOps = 0;
     bool usePseudoRandom = false;
@@ -400,6 +440,12 @@ PdpInverseConfidenceStrategy::parseAndExpand(int argc, char** argv)
         std::string arg = argv[i];
         if (arg == "--iterations" && i + 1 < argc) {
             iterations = static_cast<std::size_t>(std::atol(argv[++i]));
+        } else if (arg == "--threads" && i + 1 < argc) {
+            if (!parseStrictUnsigned(argv[++i], threads)) {
+                spdlog::error("Invalid --threads value '{}': expected a non-negative integer.",
+                              argv[i]);
+                return {};
+            }
         } else if (arg == "--block-size" && i + 1 < argc) {
             blockSize = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--maintenance-ops" && i + 1 < argc) {
@@ -443,6 +489,7 @@ PdpInverseConfidenceStrategy::parseAndExpand(int argc, char** argv)
         cfg->blockSize = blockSize;
         cfg->maintenanceOps = maintenanceOps;
         cfg->iterations = iterations;
+        cfg->threads = threads;
         cfg->usePseudoRandom = usePseudoRandom;
         cfg->seed = seed;
         configs.push_back(std::move(cfg));
@@ -471,6 +518,7 @@ std::vector<std::unique_ptr<BenchmarkConfig>>
 IdentityVerifyStrategy::parseAndExpand(int argc, char** argv)
 {
     std::size_t iterations = 10;
+    std::size_t threads = 1;
     std::size_t numUsers = 10;
     std::size_t samplesPerIteration = 20;
     double forgeryRatio = 0.0;
@@ -486,6 +534,12 @@ IdentityVerifyStrategy::parseAndExpand(int argc, char** argv)
         std::string arg = argv[i];
         if (arg == "--iterations" && i + 1 < argc) {
             iterations = static_cast<std::size_t>(std::atol(argv[++i]));
+        } else if (arg == "--threads" && i + 1 < argc) {
+            if (!parseStrictUnsigned(argv[++i], threads)) {
+                spdlog::error("Invalid --threads value '{}': expected a non-negative integer.",
+                              argv[i]);
+                return {};
+            }
         } else if (arg == "--num-users" && i + 1 < argc) {
             numUsers = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--samples-per-iter" && i + 1 < argc) {
@@ -533,6 +587,7 @@ IdentityVerifyStrategy::parseAndExpand(int argc, char** argv)
         cfg->negativeSamples.tamperedRatio = tamperedRatio;
         cfg->negativeSamples.impersonationRatio = impersonationRatio;
         cfg->iterations = iterations;
+        cfg->threads = threads;
         cfg->usePseudoRandom = usePseudoRandom;
         cfg->seed = seed;
         return cfg;

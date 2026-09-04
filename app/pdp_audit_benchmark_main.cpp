@@ -30,14 +30,15 @@
  *          --strategy-path <dir>         Strategy library directory
  *          --computation <type>          PdpDirect / PdpFixedRatio / PdpInverseConfidence
  *          --iterations <N>              Iterations per combo (default: 10)
+ *          --threads <N>                 Parallel worker threads (default: 1; 0 = auto)
  *          --maintenance-ops <N>         Dynamic PDP maintenance ops (default: 0)
  *          --json <path>                 Write JSON report to file
  *          --list-algorithms             List all available algorithms and exit
  *          --help                        Show help message
  *          (Computation-specific sweep parameters are documented in --help.)
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.2.0
+ * @date 2026-09-05
  */
 
 #include <ChordAuditMatrixBench/benchmark_computation_strategy.h>
@@ -80,6 +81,7 @@ static void printUsage(const char* progName)
     spdlog::info("                             PdpFixedRatio        — fixed t/N, r/N ratios, scan N");
     spdlog::info("                             PdpInverseConfidence — target P*, scan N, solve min r");
     spdlog::info("  --iterations <N>            Iterations per combo (default: 10)");
+    spdlog::info("  --threads <N>               Parallel worker threads (default: 1; 0 = auto: hardware_concurrency)");
     spdlog::info("  --maintenance-ops <N>       Maintenance ops before audit (dynamic only, default: 0)");
     spdlog::info("  --json <path>               Write JSON report to file");
     spdlog::info("  --list-algorithms           List all available algorithms and exit");
@@ -244,9 +246,11 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // ── Create PDP audit scenario + runner ──
-    auto scenario = std::make_unique<PdpAuditScenario>(algorithmType, strategyManager);
-    BenchmarkRunner runner(std::move(scenario));
+    // ── Create the benchmark runner with a PDP scenario factory ──
+    // One independent scenario is created per worker per run by the runner.
+    BenchmarkRunner runner(BenchmarkScenarioFactory([algorithmType, strategyManager]() {
+        return std::make_unique<PdpAuditScenario>(algorithmType, strategyManager);
+    }));
 
     // ── Factory-create the computation strategy ──
     auto strategy = createComputationStrategy(computationType);
@@ -275,7 +279,7 @@ int main(int argc, char* argv[])
     spdlog::info("\n=== Benchmark Complete ===");
 
     // ── Build report (virtual createReport) ──
-    auto report = strategy->createReport(results, runner.algorithmType());
+    auto report = strategy->createReport(results, algorithmType);
     std::cout << report->toConsole();
 
     if (!jsonPath.empty()) {

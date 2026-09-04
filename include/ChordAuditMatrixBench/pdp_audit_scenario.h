@@ -37,8 +37,8 @@
  *          - Iteration: genChallenges → genProofs → verifyProofs
  *
  * @author Dylan Liu
- * @version 3.0.0
- * @date 2026-07-08
+ * @version 4.2.0
+ * @date 2026-09-05
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_PDP_AUDIT_SCENARIO_H
@@ -151,6 +151,13 @@ public:
     /// @brief Returns the algorithm type identifier
     /// @return Algorithm type string
     std::string algorithmType() const override;
+    /// @brief Whether one run's iterations can be partitioned across workers
+    /// @return false for dynamic PDP (per-run StateStore injected on the shared
+    ///         strategy instance cannot be partitioned); true for static PDP
+    /// @details Code-level capability: dynamic strategies hold one injected
+    ///          StateStore per run on the manager-shared strategy instance, so
+    ///          concurrent workers would race on it even during setup().
+    bool supportsParallelIterations() const override;
     /// @brief One-time setup: init engine, generate keys/tags, build block source
     /// @param config PDP benchmark configuration
     void setup(const BenchmarkConfig& config) override;

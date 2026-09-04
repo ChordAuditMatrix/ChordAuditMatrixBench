@@ -140,6 +140,31 @@ std::string PdpAuditScenario::algorithmType() const
 }
 
 // ==================================================================
+// PdpAuditScenario — supportsParallelIterations (code-level capability)
+// ==================================================================
+
+bool PdpAuditScenario::supportsParallelIterations() const
+{
+    // Dynamic PDP strategies (e.g. DHTDynamic) hold a single per-run
+    // StateStore injected via setStateStore() on the manager-owned strategy
+    // instance, and their challenge/tag/maintenance implementations read that
+    // member directly. Concurrent workers would overwrite and race on it —
+    // even during setup(). Static PDP strategies pass all per-run state
+    // through engine contexts, so their independent trials partition cleanly.
+    // An unresolvable strategy reports false: the runner then executes the
+    // scenario serially and surfaces the setup error at the same single point
+    // as before this change.
+    if (!strategyManager_) {
+        return false;
+    }
+    auto strategy = strategyManager_->getStrategy(algorithmType_);
+    if (!strategy) {
+        return false;
+    }
+    return strategy->kind() != AuditCore::StrategyKind::Dynamic;
+}
+
+// ==================================================================
 // PdpAuditScenario — setup
 // ==================================================================
 

@@ -25,8 +25,8 @@
  *          computeResult → teardown. Runner calls these methods polymorphically
  *          with zero type switch.
  * @author Dylan Liu
- * @version 4.0.0
- * @date 2026-07-22
+ * @version 4.2.0
+ * @date 2026-09-05
  */
 
 #ifndef CAMATRIX_AUDIT_BENCHMARK_SCENARIO_H
@@ -58,10 +58,28 @@ class MetricsCollector;  // forward declaration (defined in metrics_collector.h)
  *          4. recordIteration(collector) — record per-iteration metrics (PDP/Identity-specific)
  *          5. computeResult(...)  — aggregate into a polymorphic BenchmarkResult
  *          6. teardown()          — cleanup
+ *
+ *          Iterations of one run are independent by default; the Runner splits
+ *          them across parallel workers, each with its own scenario instance.
+ *          Scenarios whose computation carries per-run state that cannot be
+ *          partitioned override supportsParallelIterations() to force serial
+ *          execution (Runner still creates one scenario per run).
  */
 class BenchmarkScenario {
 public:
     virtual ~BenchmarkScenario() = default;
+
+    /**
+     * @brief Whether one run's iterations can be partitioned across workers
+     * @return true if an independently constructed scenario can execute any
+     *         contiguous sub-range of the iteration loop; false forces the
+     *         Runner to execute the run serially with a single scenario
+     * @details Defaults to true (iterations are independent trials). PDP
+     *          scenarios override this based on the resolved strategy kind:
+     *          dynamic PDP injects a per-run StateStore onto the shared
+     *          algorithm instance, so it cannot be partitioned.
+     */
+    virtual bool supportsParallelIterations() const { return true; }
 
     /**
      * @brief Get the algorithm type identifier
