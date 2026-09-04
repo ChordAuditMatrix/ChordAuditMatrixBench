@@ -44,11 +44,13 @@
 #include <ChordAuditMatrixBench/benchmark_computation_strategy.h>
 #include <ChordAuditMatrixBench/benchmark_runner.h>
 #include <ChordAuditMatrixBench/benchmark_types.h>
+#include <ChordAuditMatrixBench/dynamic_strategy_execution_coordinator.h>
 #include <ChordAuditMatrixBench/pdp_audit_scenario.h>
 
 #include "ChordAuditMatrixLib/implementations/audit/in_memory_audit_strategy_manager.h"
 #include "ChordAuditMatrixLib/implementations/base/loader/algorithm_hot_load_decorator.h"
 #include "ChordAuditMatrixLib/interfaces/audit/strategy.h"
+#include "ChordAuditMatrixLib/interfaces/audit/dynamic_strategy.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -80,9 +82,8 @@ static void printUsage(const char* progName)
     spdlog::info("                             PdpDirect            — explicit (N,t,r) or t/r sweeps at fixed N");
     spdlog::info("                             PdpFixedRatio        — fixed t/N, r/N ratios, scan N");
     spdlog::info("                             PdpInverseConfidence — target P*, scan N, solve min r");
-    spdlog::info("  --iterations <N>            Iterations per combo (default: 10)");
     spdlog::info("  --threads <N>               Parallel worker threads (default: 1; 0 = auto: hardware_concurrency)");
-    spdlog::info("  --maintenance-ops <N>       Maintenance ops before audit (dynamic only, default: 0)");
+    spdlog::info("  --maintenance-ops <N>       Maintenance ops per worker-local dynamic fixture (default: 0)");
     spdlog::info("  --json <path>               Write JSON report to file");
     spdlog::info("  --list-algorithms           List all available algorithms and exit");
     spdlog::info("  --help                      Show this help message");
@@ -247,10 +248,30 @@ int main(int argc, char* argv[])
     }
 
     // ── Create the benchmark runner with a PDP scenario factory ──
-    // One independent scenario is created per worker per run by the runner.
-    BenchmarkRunner runner(BenchmarkScenarioFactory([algorithmType, strategyManager]() {
-        return std::make_unique<PdpAuditScenario>(algorithmType, strategyManager);
-    }));
+    // Dynamic workers share the stateless strategy but bind their own
+    // StateStore through one coordinator for each dependent operation.
+    std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator;
+    auto selectedStrategy = strategyManager->getStrategy(algorithmType);
+    if (selectedStrategy->kind() ==
+        CAMatrix::Audit::Core::StrategyKind::Dynamic) {
+        auto dynamicStrategy = std::dynamic_pointer_cast<
+            CAMatrix::Audit::Core::DynamicAuditStrategy>(selectedStrategy);
+        if (!dynamicStrategy) {
+            spdlog::error(
+                "Algorithm '{}' reports Dynamic kind but does not implement "
+                "DynamicAuditStrategy", algorithmType);
+            return 1;
+        }
+        dynamicCoordinator =
+            std::make_shared<DynamicStrategyExecutionCoordinator>(
+                std::move(dynamicStrategy));
+    }
+
+    BenchmarkRunner runner(BenchmarkScenarioFactory(
+        [algorithmType, strategyManager, dynamicCoordinator]() {
+            return std::make_unique<PdpAuditScenario>(
+                algorithmType, strategyManager, dynamicCoordinator);
+        }));
 
     // ── Factory-create the computation strategy ──
     auto strategy = createComputationStrategy(computationType);

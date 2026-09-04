@@ -59,6 +59,7 @@ namespace CAMatrix::Audit::Core {
 class AuditEngine;
 class AuditOperationContext;
 class AuditStrategyManager;
+class DynamicAuditStrategy;
 class DynamicPdpStateStore;
 enum class StrategyKind : std::uint8_t;
 } // namespace CAMatrix::Audit::Core
@@ -74,6 +75,7 @@ using TagsPtr = std::shared_ptr<Tags>;
 } // namespace CAMatrix::Audit::Messages
 
 namespace CAMatrix::Audit::Benchmark {
+class DynamicStrategyExecutionCoordinator;
 
 /**
  * @struct PdpScenarioContext
@@ -138,11 +140,14 @@ public:
     /**
      * @brief Construct a PDP audit scenario
      * @param algorithmType Algorithm identifier (e.g., "SM9Static")
-     * @param strategyManager Shared pointer to an AuditStrategyManager with
-     *                          strategies already registered/loaded
+     * @param strategyManager Shared manager containing the selected strategy
+     * @param dynamicCoordinator Shared coordinator for parallel dynamic scenarios;
+     *        omit for static scenarios and direct serial use
      */
-    PdpAuditScenario(const std::string& algorithmType,
-                     std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager);
+    PdpAuditScenario(
+        const std::string& algorithmType,
+        std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager,
+        std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator = {});
 
     ~PdpAuditScenario() override = default;
 
@@ -152,11 +157,8 @@ public:
     /// @return Algorithm type string
     std::string algorithmType() const override;
     /// @brief Whether one run's iterations can be partitioned across workers
-    /// @return false for dynamic PDP (per-run StateStore injected on the shared
-    ///         strategy instance cannot be partitioned); true for static PDP
-    /// @details Code-level capability: dynamic strategies hold one injected
-    ///          StateStore per run on the manager-shared strategy instance, so
-    ///          concurrent workers would race on it even during setup().
+    /// @return true for static PDP and for dynamic PDP when a shared
+    ///         StateStore execution coordinator was supplied
     bool supportsParallelIterations() const override;
     /// @brief One-time setup: init engine, generate keys/tags, build block source
     /// @param config PDP benchmark configuration
@@ -240,6 +242,8 @@ public:
 private:
     std::string algorithmType_;
     std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager_;
+    std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator_;
+    std::shared_ptr<CAMatrix::Audit::Core::DynamicAuditStrategy> dynamicStrategy_;
     PdpScenarioContext ctx_;
     PdpAuditConfig config_;
 
