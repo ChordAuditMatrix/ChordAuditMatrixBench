@@ -232,17 +232,21 @@ public:
     /**
      * @brief Merge raw metrics from a worker-local collector into this one
      * @details Sums raw totals, call counts, byte counts, and outcome counters
-     *          (per-iteration timings, message sizes, PDP detections, identity
-     *          TP/FP/TN/FN samples). Averages are recomputed from the merged
-     *          totals here (per add), so each average is derived from the full
-     *          run rather than from averaging per-worker averages; derived
-     *          per-iteration rates are computed only at result filling time
-     *          from the config iteration count. Setup-phase metrics of the
-     *          receiving collector are kept — in a parallel run the receiver
-     *          holds worker 0's record, the representative single-setup
-     *          measurement (each worker performs its own setup, but one
-     *          setup-per-run reporting is preserved). The memory peak takes
-     *          the higher of the two values.
+     *          across both collectors — per-iteration and setup-stage timings,
+     *          message sizes, PDP detections, and identity TP/FP/TN/FN samples.
+     *          Averages are recomputed from the merged totals here (per add),
+     *          so each average is derived from the full run rather than from
+     *          averaging per-worker averages; derived per-iteration rates are
+     *          computed only at result filling time from the config iteration
+     *          count. Setup-phase metrics merge exactly like per-iteration
+     *          ones: every worker performs its own one-time setup, so the
+     *          summed totals/counts span every worker's setup and the
+     *          normalized averages weight each worker by its call or message
+     *          count. A side that never recorded setup data contributes zero
+     *          totals and cannot clear the other side's recorded flag; when
+     *          only the donor recorded, its record is adopted, and the flag
+     *          stays clear only when neither side recorded. The memory peak
+     *          takes the higher of the two values.
      * @param other Worker-local collector to merge into this one
      */
     void mergeFrom(const MetricsCollector& other)
@@ -265,6 +269,24 @@ public:
         add(iterationMessageSizes_.signing, other.iterationMessageSizes_.signing);
         add(iterationMessageSizes_.verification, other.iterationMessageSizes_.verification);
 
+        add(setupTimings_.initAlgorithm, other.setupTimings_.initAlgorithm);
+        add(setupTimings_.generateKeys, other.setupTimings_.generateKeys);
+        add(setupTimings_.generateTags, other.setupTimings_.generateTags);
+        add(setupTimings_.generateChallenges, other.setupTimings_.generateChallenges);
+        add(setupTimings_.generateProofs, other.setupTimings_.generateProofs);
+        add(setupTimings_.verifyProofs, other.setupTimings_.verifyProofs);
+        add(setupTimings_.sign, other.setupTimings_.sign);
+        add(setupTimings_.aggregateVerify, other.setupTimings_.aggregateVerify);
+        add(setupTimings_.aggregate, other.setupTimings_.aggregate);
+        add(setupTimings_.maintain, other.setupTimings_.maintain);
+
+        add(setupMessageSizes_.tags, other.setupMessageSizes_.tags);
+        add(setupMessageSizes_.challenge, other.setupMessageSizes_.challenge);
+        add(setupMessageSizes_.proof, other.setupMessageSizes_.proof);
+        add(setupMessageSizes_.keyGeneration, other.setupMessageSizes_.keyGeneration);
+        add(setupMessageSizes_.signing, other.setupMessageSizes_.signing);
+        add(setupMessageSizes_.verification, other.setupMessageSizes_.verification);
+
         iterations_ += other.iterations_;
         detections_ += other.detections_;
         totalVerifySamples_ += other.totalVerifySamples_;
@@ -273,8 +295,9 @@ public:
         trueRejects_ += other.trueRejects_;
         falseRejects_ += other.falseRejects_;
         memoryPeakBytes_ = std::max(memoryPeakBytes_, other.memoryPeakBytes_);
-        // Setup metrics of `other` are intentionally not merged: the receiver
-        // keeps its own (worker 0) representative setup record.
+        setupTimingsRecorded_ = setupTimingsRecorded_ || other.setupTimingsRecorded_;
+        setupMessageSizesRecorded_ =
+            setupMessageSizesRecorded_ || other.setupMessageSizesRecorded_;
     }
 
 private:
