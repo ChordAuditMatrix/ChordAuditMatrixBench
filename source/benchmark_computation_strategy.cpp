@@ -473,9 +473,9 @@ IdentityVerifyStrategy::parseAndExpand(int argc, char** argv)
     std::size_t iterations = 10;
     std::size_t numUsers = 10;
     std::size_t samplesPerIteration = 20;
-    double forgeryRatio = 0.25;
-    double tamperedRatio = 0.25;
-    double impersonationRatio = 0.25;
+    double forgeryRatio = 0.0;
+    double tamperedRatio = 0.5;
+    double impersonationRatio = 0.0;
     bool usePseudoRandom = false;
     std::uint64_t seed = 0;
     bool sweepMode = false;
@@ -568,9 +568,13 @@ std::unique_ptr<BenchmarkResult> IdentityVerifyStrategy::run(
     auto result = runner.runSingle(cfg);
     auto* id = dynamic_cast<IdentityResult*>(result.get());
     if (id) {
-        spdlog::info("accuracy={:.2f} (TP={} FP={} TN={} FN={})",
-                     id->accuracyRate, id->trueAccepts,
-                     id->falseAccepts, id->trueRejects, id->falseRejects);
+        spdlog::info(
+            "accuracy={:.2f} (TP/iter={:.2f} FP/iter={:.2f} TN/iter={:.2f} FN/iter={:.2f}; "
+            "totals TP={} FP={} TN={} FN={})",
+            id->accuracyRate, id->averageTrueAccepts,
+            id->averageFalseAccepts, id->averageTrueRejects,
+            id->averageFalseRejects, id->trueAccepts,
+            id->falseAccepts, id->trueRejects, id->falseRejects);
     }
     return result;
 }

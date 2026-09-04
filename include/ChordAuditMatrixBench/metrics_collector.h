@@ -185,6 +185,8 @@ public:
     {
         result.numUsers = config.numUsers;
         result.totalVerifySamples = totalVerifySamples_;
+        result.averageVerifySamples = averagePerIteration(
+            totalVerifySamples_, config.iterations);
         result.accuracyRate = (totalVerifySamples_ > 0)
             ? static_cast<double>(trueAccepts_ + trueRejects_)
               / static_cast<double>(totalVerifySamples_) : 0.0;
@@ -192,6 +194,10 @@ public:
         result.falseAccepts = falseAccepts_;
         result.trueRejects = trueRejects_;
         result.falseRejects = falseRejects_;
+        result.averageTrueAccepts = averagePerIteration(trueAccepts_, config.iterations);
+        result.averageFalseAccepts = averagePerIteration(falseAccepts_, config.iterations);
+        result.averageTrueRejects = averagePerIteration(trueRejects_, config.iterations);
+        result.averageFalseRejects = averagePerIteration(falseRejects_, config.iterations);
         fillCommonMetrics(result, config);
     }
 
@@ -242,6 +248,11 @@ private:
 
     std::size_t memoryPeakBytes_ = 0;
 
+    static double averagePerIteration(std::size_t total, std::size_t iterations)
+    {
+        return (iterations > 0)
+            ? static_cast<double>(total) / static_cast<double>(iterations) : 0.0;
+    }
     static void normalize(TimingMetric& metric)
     {
         metric.averageMs = (metric.callCount > 0)

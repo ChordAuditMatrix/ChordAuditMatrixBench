@@ -74,9 +74,9 @@ static void printUsage(const char* progName)
     spdlog::info("  --iterations <N>            Iterations per combo (default: 10)");
     spdlog::info("  --num-users <N>             Number of users (default: 10)");
     spdlog::info("  --samples-per-iter <N>      Samples per iteration (default: 20)");
-    spdlog::info("  --forgery-ratio <r>         Forgery ratio (default: 0.25)");
-    spdlog::info("  --tampered-ratio <r>        Tampered ratio (default: 0.25)");
-    spdlog::info("  --impersonation-ratio <r>   Impersonation ratio (default: 0.25)");
+    spdlog::info("  --forgery-ratio <r>         Forgery ratio (default: 0)");
+    spdlog::info("  --tampered-ratio <r>        Tampered ratio (default: 0.5)");
+    spdlog::info("  --impersonation-ratio <r>   Impersonation ratio (default: 0)");
     spdlog::info("  --sweep                     Scan user counts (default list: 1,5,10,50,100,500,1000)");
     spdlog::info("  --user-values <csv>         Explicit user list");
     spdlog::info("  --user-start/--user-end/--user-step  Linear user sweep");

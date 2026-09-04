@@ -436,19 +436,19 @@ std::string IdentityReport::toConsole() const
 
     oss << "Parameter Descriptions:\n";
     oss << "  Users             — Enrolled users\n";
-    oss << "  Samples/Iter      — Verification samples per iteration\n";
-    oss << "  Accuracy Rate     — (TP + TN) / total\n";
-    oss << "  TP/FP/TN/FN       — True/false accepts/rejects\n\n";
+    oss << "  Samples/Iter      — Average verification samples per iteration\n";
+    oss << "  Accuracy Rate     — (TP + TN) / total samples\n";
+    oss << "  TP/FP/TN/FN       — Average outcome count per iteration\n\n";
 
     oss << std::left
         << std::setw(8)  << "Users"
-        << std::setw(12) << "Samples"
+        << std::setw(14) << "Samples/Iter"
         << std::setw(12) << "Iterations"
         << std::setw(14) << "Accuracy"
-        << std::setw(10) << "TP"
-        << std::setw(10) << "FP"
-        << std::setw(10) << "TN"
-        << std::setw(10) << "FN"
+        << std::setw(12) << "TP/Iter"
+        << std::setw(12) << "FP/Iter"
+        << std::setw(12) << "TN/Iter"
+        << std::setw(12) << "FN/Iter"
         << "\n";
     oss << std::string(100, '-') << "\n";
 
@@ -456,14 +456,14 @@ std::string IdentityReport::toConsole() const
         if (!r) continue;
         oss << std::left
             << std::setw(8)  << r->numUsers
-            << std::setw(12) << r->totalVerifySamples
+            << std::setw(14) << std::fixed << std::setprecision(2)
+            << r->averageVerifySamples
             << std::setw(12) << r->iterations
-            << std::fixed << std::setprecision(2)
             << std::setw(14) << r->accuracyRate
-            << std::setw(10) << r->trueAccepts
-            << std::setw(10) << r->falseAccepts
-            << std::setw(10) << r->trueRejects
-            << std::setw(10) << r->falseRejects
+            << std::setw(12) << r->averageTrueAccepts
+            << std::setw(12) << r->averageFalseAccepts
+            << std::setw(12) << r->averageTrueRejects
+            << std::setw(12) << r->averageFalseRejects
             << "\n";
     }
 
@@ -471,7 +471,9 @@ std::string IdentityReport::toConsole() const
     for (const auto* r : identityResults_) {
         if (!r) continue;
         oss << "  Users=" << r->numUsers
-            << " Samples=" << r->totalVerifySamples << ":\n";
+            << " Samples total=" << r->totalVerifySamples
+            << " (avg/iter=" << std::fixed << std::setprecision(2)
+            << r->averageVerifySamples << "):\n";
         oss << "    Setup (one-time):\n";
         oss << "      Init algorithm:   " << timingSummary(r->setupTimings.initAlgorithm) << "\n";
         oss << "      Key generation:   " << timingSummary(r->setupTimings.generateKeys) << "\n";
@@ -491,12 +493,16 @@ std::string IdentityReport::toConsole() const
             oss << "      Signing:          " << messageSummary(r->iterationMessageSizes.signing) << "\n";
             oss << "      Verification:     " << messageSummary(r->iterationMessageSizes.verification) << "\n";
         }
-        oss << "    Confusion Matrix:\n";
+        oss << "    Confusion Matrix (average per iteration; totals in parentheses):\n";
         oss << "                    Predicted Accept  Predicted Reject\n";
-        oss << "      Actual Accept   TP=" << r->trueAccepts
-            << "          FN=" << r->falseRejects << "\n";
-        oss << "      Actual Reject   FP=" << r->falseAccepts
-            << "          TN=" << r->trueRejects << "\n";
+        oss << "      Actual Accept   TP/iter=" << r->averageTrueAccepts
+            << " (total=" << r->trueAccepts << ")"
+            << "  FN/iter=" << r->averageFalseRejects
+            << " (total=" << r->falseRejects << ")\n";
+        oss << "      Actual Reject   FP/iter=" << r->averageFalseAccepts
+            << " (total=" << r->falseAccepts << ")"
+            << "  TN/iter=" << r->averageTrueRejects
+            << " (total=" << r->trueRejects << ")\n";
     }
     return oss.str();
 }
@@ -517,13 +523,23 @@ std::string IdentityReport::toJson() const
         oss << "    {\n";
         oss << "      \"numUsers\": " << r->numUsers << ",\n";
         oss << "      \"totalVerifySamples\": " << r->totalVerifySamples << ",\n";
+        oss << "      \"averageVerifySamples\": " << std::fixed << std::setprecision(2)
+            << r->averageVerifySamples << ",\n";
         oss << "      \"iterations\": " << r->iterations << ",\n";
         oss << "      \"algorithmKind\": \"" << r->algorithmKind << "\",\n";
         oss << "      \"accuracyRate\": " << std::fixed << std::setprecision(2) << r->accuracyRate << ",\n";
         oss << "      \"trueAccepts\": " << r->trueAccepts << ",\n";
+        oss << "      \"averageTrueAccepts\": " << std::fixed << std::setprecision(2)
+            << r->averageTrueAccepts << ",\n";
         oss << "      \"falseAccepts\": " << r->falseAccepts << ",\n";
+        oss << "      \"averageFalseAccepts\": " << std::fixed << std::setprecision(2)
+            << r->averageFalseAccepts << ",\n";
         oss << "      \"trueRejects\": " << r->trueRejects << ",\n";
+        oss << "      \"averageTrueRejects\": " << std::fixed << std::setprecision(2)
+            << r->averageTrueRejects << ",\n";
         oss << "      \"falseRejects\": " << r->falseRejects << ",\n";
+        oss << "      \"averageFalseRejects\": " << std::fixed << std::setprecision(2)
+            << r->averageFalseRejects << ",\n";
         oss << "      \"setupTimings\": {\n";
         oss << "        \"initAlgorithm\": " << timingMetricJson(r->setupTimings.initAlgorithm) << ",\n";
         oss << "        \"generateKeys\": " << timingMetricJson(r->setupTimings.generateKeys) << "\n";

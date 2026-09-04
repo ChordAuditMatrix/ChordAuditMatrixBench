@@ -75,9 +75,9 @@ struct SeqSpec {
  * @brief Configuration for negative sample generation in identity verification
  */
 struct NegativeSampleConfig {
-    double forgeryRatio = 0.25; /**< Fraction of samples with fully forged signatures */
-    double tamperedRatio = 0.25; /**< Fraction of samples with tampered message content */
-    double impersonationRatio = 0.25; /**< Fraction of samples signed by an impersonating identity */
+    double forgeryRatio = 0.0; /**< Fraction of samples with fully forged signatures */
+    double tamperedRatio = 0.5; /**< Fraction of samples with tampered message content */
+    double impersonationRatio = 0.0; /**< Fraction of samples signed by an impersonating identity */
     // Positive ratio = 1.0 - sum(above)
 };
 
@@ -260,12 +260,18 @@ class IdentityResult : public BenchmarkResult {
 public:
     std::size_t numUsers = 0; /**< Number of users in the identity set */
     std::size_t totalVerifySamples = 0; /**< Total samples verified across iterations */
-    double accuracyRate = 0; /**< (TP + TN) / total */
+    double averageVerifySamples = 0.0; /**< Average samples verified per iteration */
+    double accuracyRate = 0; /**< (TP + TN) / total samples */
 
-    std::size_t trueAccepts = 0; /**< TP */
-    std::size_t falseAccepts = 0; /**< FP */
-    std::size_t trueRejects = 0; /**< TN */
-    std::size_t falseRejects = 0; /**< FN */
+    std::size_t trueAccepts = 0; /**< Total TP across iterations */
+    std::size_t falseAccepts = 0; /**< Total FP across iterations */
+    std::size_t trueRejects = 0; /**< Total TN across iterations */
+    std::size_t falseRejects = 0; /**< Total FN across iterations */
+
+    double averageTrueAccepts = 0.0; /**< Average TP per iteration */
+    double averageFalseAccepts = 0.0; /**< Average FP per iteration */
+    double averageTrueRejects = 0.0; /**< Average TN per iteration */
+    double averageFalseRejects = 0.0; /**< Average FN per iteration */
 
     std::string algorithmKind = "Unknown"; /**< "Online" / "Offline" / "Unknown" */
 };
