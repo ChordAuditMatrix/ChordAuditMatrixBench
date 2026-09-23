@@ -57,7 +57,7 @@
 #include "ChordAuditMatrixLib/interfaces/audit/dynamic_strategy.h"
 
 // ── Dynamic PDP state store ──
-#include "ChordAuditMatrixLib/implementations/audit/state_stores/dynamic_pdp_state_store.h"
+#include "ChordAuditMatrixLib/interfaces/audit/state_stores/dynamic_pdp_state_store.h"
 
 // ── Block source ──
 #include "ChordAuditMatrixLib/implementations/audit/data/memory_audit_block_source.h"
@@ -83,6 +83,15 @@ namespace {
 namespace AuditCore = CAMatrix::Audit::Core;
 namespace AuditMsg  = CAMatrix::Audit::Messages;
 namespace AuditData = CAMatrix::Audit::Data;
+
+// Engine-stage input keys come from the CoreLib stage contracts, so the
+// scenario writes the same strings the strategies parse.
+using KeyGenKeys = AuditMsg::KeyGenerationEngineContract::Env;
+using TagsKeys   = AuditMsg::GenerateTagsEngineContract::Env;
+using MaintKeys  = AuditMsg::MaintenanceEngineContract::Env;
+using ChalKeys   = AuditMsg::ChallengeGenEngineContract::Env;
+using ProveKeys  = AuditMsg::ProofGenEngineContract::Env;
+using VerifyKeys = AuditMsg::ProofVerifyEngineContract::Env;
 
 /// Helper: create a JSON RawInput from a Json::Value
 AuditMsg::RawInput jsonInput(const ::Json::Value& v)
@@ -220,7 +229,7 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
 
     // Step 5: Generate keys
     ::Json::Value keyJson;
-    keyJson["userId"] = ctx_.userId;
+    keyJson[KeyGenKeys::kUserId] = ctx_.userId;
     measureTiming(ctx_.setupTimings.generateKeys, [&]() {
         ctx_.engine->generateKeys(jsonInput(keyJson), *ctx_.opCtx);
     });
@@ -248,9 +257,9 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
 
     // Step 7: Generate tags from original blocks
     auto tagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
-    tagsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(ctx_.originalBlocks));
-    tagsDataMap->emplace("fileId", ctx_.fileId);
-    tagsDataMap->emplace("userId", ctx_.userId);
+    tagsDataMap->emplace(std::string(TagsKeys::kBlocks), AuditData::AuditBlockSourcePtr(ctx_.originalBlocks));
+    tagsDataMap->emplace(std::string(TagsKeys::kFileId), ctx_.fileId);
+    tagsDataMap->emplace(std::string(TagsKeys::kUserId), ctx_.userId);
     auto generateTags = [&]() {
         measureTiming(ctx_.setupTimings.generateTags, [&]() {
             ctx_.engine->generateTags(AuditMsg::RawInput(tagsDataMap), *ctx_.opCtx);
@@ -282,10 +291,10 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
             auto opType = static_cast<AuditMsg::MaintenanceOpType>(opTypeDist(rng));
 
             ::Json::Value maintainJson;
-            maintainJson["fileId"] = ctx_.fileId;
-            maintainJson["opType"] = static_cast<int>(opType);
-            maintainJson["blockIndices"] = ::Json::Value(::Json::arrayValue);
-            maintainJson["blockIndices"].append(static_cast<::Json::UInt64>(blockIdx));
+            maintainJson[MaintKeys::kFileId] = ctx_.fileId;
+            maintainJson[MaintKeys::kOpType] = static_cast<int>(opType);
+            maintainJson[MaintKeys::kBlockIndices] = ::Json::Value(::Json::arrayValue);
+            maintainJson[MaintKeys::kBlockIndices].append(static_cast<::Json::UInt64>(blockIdx));
 
             AuditCore::AuditOperationContext maintainCtx;
             maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
@@ -298,9 +307,9 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
                     cfg.blockSize, 0);
 
                 auto newTagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
-                newTagsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(newBlockSource));
-                newTagsDataMap->emplace("fileId", ctx_.fileId);
-                newTagsDataMap->emplace("userId", ctx_.userId);
+                newTagsDataMap->emplace(std::string(TagsKeys::kBlocks), AuditData::AuditBlockSourcePtr(newBlockSource));
+                newTagsDataMap->emplace(std::string(TagsKeys::kFileId), ctx_.fileId);
+                newTagsDataMap->emplace(std::string(TagsKeys::kUserId), ctx_.userId);
 
                 executeWithDynamicStateStore(
                     dynamicCoordinator_, dynamicStrategy_, ctx_.stateStore, [&]() {
@@ -421,14 +430,14 @@ bool PdpAuditScenario::runIteration()
 
     // Step 1: Generate challenges — sample r blocks
     ::Json::Value chalJson;
-    chalJson["fileId"] = ctx_.fileId;
-    chalJson["challengeCount"] = static_cast<::Json::UInt64>(config_.sampleSize);
-    chalJson["usePseudoRandom"] = false;
+    chalJson[ChalKeys::kFileId] = ctx_.fileId;
+    chalJson[ChalKeys::kChallengeCount] = static_cast<::Json::UInt64>(config_.sampleSize);
+    chalJson[ChalKeys::kUsePseudoRandom] = false;
     if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic && ctx_.stateStore) {
-        chalJson["blockCount"] = static_cast<::Json::UInt64>(
+        chalJson[ChalKeys::kBlockCount] = static_cast<::Json::UInt64>(
             ctx_.stateStore->getBlockCount(ctx_.fileId));
     } else {
-        chalJson["blockCount"] = static_cast<::Json::UInt64>(
+        chalJson[ChalKeys::kBlockCount] = static_cast<::Json::UInt64>(
             ctx_.corruptedBlocks->availableBlockCount());
     }
     auto generateChallenges = [&]() {
@@ -445,16 +454,16 @@ bool PdpAuditScenario::runIteration()
 
     // Step 2: Generate proofs using corrupted blocks + original tags
     auto proofsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
-    proofsDataMap->emplace("blocks", AuditData::AuditBlockSourcePtr(ctx_.corruptedBlocks));
-    proofsDataMap->emplace("tags", AuditMsg::TagsPtr(ctx_.tags));
+    proofsDataMap->emplace(std::string(ProveKeys::kBlocks), AuditData::AuditBlockSourcePtr(ctx_.corruptedBlocks));
+    proofsDataMap->emplace(std::string(ProveKeys::kTags), AuditMsg::TagsPtr(ctx_.tags));
     measureTiming(lastTimings_.generateProofs, [&]() {
         ctx_.engine->generateProofs(AuditMsg::RawInput(proofsDataMap), iterCtx);
     });
 
     // Step 3: Verify proofs
     ::Json::Value verifyJson;
-    verifyJson["fileId"] = ctx_.fileId;
-    verifyJson["userId"] = ctx_.userId;
+    verifyJson[VerifyKeys::kFileId] = ctx_.fileId;
+    verifyJson[VerifyKeys::kUserId] = ctx_.userId;
     measureTiming(lastTimings_.verifyProofs, [&]() {
         ctx_.engine->verifyProofs(jsonInput(verifyJson), iterCtx);
     });

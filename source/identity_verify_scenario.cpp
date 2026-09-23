@@ -60,6 +60,11 @@ namespace CAMatrix::Audit::Benchmark {
 
 namespace {
 
+// Identity stage key descriptors — AuditDataMap wire keys per engine stage.
+using IdentitySignContract      = CAMatrix::Identity::Core::IdentitySignContract;
+using IdentityAggregateContract = CAMatrix::Identity::Core::IdentityAggregateContract;
+using IdentityVerifyContract    = CAMatrix::Identity::Core::IdentityVerifyContract;
+
 /**
  * @brief Measure execution time of a callable in milliseconds
  * @tparam F Callable type
@@ -129,12 +134,12 @@ CAMatrix::Crypto::CryptoArray signWithPrivateKey(
     MessageMetric* messageMetric)
 {
     CAMatrix::Audit::Messages::AuditDataMap signInput;
-    signInput.emplace("message", message);
-    signInput.emplace("userId", userId);
-    signInput.emplace("masterPub", ctx.masterPub);
-    signInput.emplace("userPriv", userPriv);
+    signInput.emplace(std::string(IdentitySignContract::kMessage), message);
+    signInput.emplace(std::string(IdentitySignContract::kUserId), userId);
+    signInput.emplace(std::string(IdentitySignContract::kMasterPub), ctx.masterPub);
+    signInput.emplace(std::string(IdentitySignContract::kUserPriv), userPriv);
     if (!sessionString.empty()) {
-        signInput.emplace("sessionString", sessionString);
+        signInput.emplace(std::string(IdentitySignContract::kSessionString), sessionString);
     }
 
     auto algo = ctx.manager->getIdentityAlgorithm(algorithmType);
@@ -328,21 +333,21 @@ bool IdentityVerifyScenario::runIteration()
             aggSig = measureCall(&lastTimings_.aggregate, [&]() {
                 AuditDataMap aggInput;
                 aggInput.emplace(std::string(
-                    CAMatrix::Identity::Core::IdentityVerifyContract::kMessage), msgBytes);
+                    IdentityAggregateContract::kMessage), msgBytes);
                 aggInput.emplace(std::string(
-                    CAMatrix::Identity::Core::IdentityVerifyContract::kSignatures),
+                    IdentityAggregateContract::kSignatures),
                     sample.signatures);
                 aggInput.emplace(std::string(
-                    CAMatrix::Identity::Core::IdentityVerifyContract::kUserIds),
+                    IdentityAggregateContract::kUserIds),
                     sample.userIds);
                 aggInput.emplace(std::string(
-                    CAMatrix::Identity::Core::IdentityVerifyContract::kUserPubKeys),
+                    IdentityAggregateContract::kUserPubKeys),
                     sample.userPubKeys);
                 aggInput.emplace(std::string(
-                    CAMatrix::Identity::Core::IdentityVerifyContract::kSessionString),
+                    IdentityAggregateContract::kSessionString),
                     sample.sessionString);
                 aggInput.emplace(std::string(
-                    CAMatrix::Identity::Core::IdentityVerifyContract::kMasterPub),
+                    IdentityAggregateContract::kMasterPub),
                     ctx_.masterPub);
                 auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
                 auto aggVariant = algo->createRequest(
@@ -365,13 +370,13 @@ bool IdentityVerifyScenario::runIteration()
 
         // ── 2. Aggregate-verify Σ against all signers ──
         AuditDataMap verifyInput;
-        verifyInput.emplace("aggregateSignature", aggSig);
-        verifyInput.emplace("message", msgBytes);
-        verifyInput.emplace("masterPub", ctx_.masterPub);
-        verifyInput.emplace("userIds", sample.userIds);
-        verifyInput.emplace("userPubKeys", sample.userPubKeys);
+        verifyInput.emplace(std::string(IdentityVerifyContract::kAggregateSignature), aggSig);
+        verifyInput.emplace(std::string(IdentityVerifyContract::kMessage), msgBytes);
+        verifyInput.emplace(std::string(IdentityVerifyContract::kMasterPub), ctx_.masterPub);
+        verifyInput.emplace(std::string(IdentityVerifyContract::kUserIds), sample.userIds);
+        verifyInput.emplace(std::string(IdentityVerifyContract::kUserPubKeys), sample.userPubKeys);
         verifyInput.emplace(std::string(
-            CAMatrix::Identity::Core::IdentityVerifyContract::kSessionString),
+            IdentityVerifyContract::kSessionString),
             sample.sessionString);
 
         accepted = measureCall(&lastTimings_.aggregateVerify, [&]() {
