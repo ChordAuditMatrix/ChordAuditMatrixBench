@@ -53,6 +53,7 @@
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -60,10 +61,36 @@ namespace CAMatrix::Audit::Benchmark {
 
 namespace {
 
-// Identity stage key descriptors — AuditDataMap wire keys per engine stage.
-using IdentitySignContract      = CAMatrix::Identity::Core::IdentitySignContract;
-using IdentityAggregateContract = CAMatrix::Identity::Core::IdentityAggregateContract;
-using IdentityVerifyContract    = CAMatrix::Identity::Core::IdentityVerifyContract;
+// Identity stage wire keys owned by this scenario: benchmark-local literals
+// that match the AuditDataMap strings the identity adapters parse. One
+// descriptor per stage, listing only the keys this producer emits.
+// sessionString is a benchmark/plugin extension key (offline adapters ignore
+// it) and is intentionally declared here rather than by any system contract.
+struct IdentitySignKeys {
+    static constexpr std::string_view kMessage       = "message"; /**< AuditDataMap key for the message to sign */
+    static constexpr std::string_view kUserId        = "userId"; /**< AuditDataMap key for the signer identifier */
+    static constexpr std::string_view kMasterPub     = "masterPub"; /**< AuditDataMap key for the master public key */
+    static constexpr std::string_view kUserPriv      = "userPriv"; /**< AuditDataMap key for the signer private key */
+    static constexpr std::string_view kSessionString = "sessionString"; /**< Benchmark extension key for the session string */
+};
+
+struct IdentityAggregateKeys {
+    static constexpr std::string_view kMessage       = "message"; /**< AuditDataMap key for the aggregate message */
+    static constexpr std::string_view kSignatures    = "signatures"; /**< AuditDataMap key for individual signatures σᵢ */
+    static constexpr std::string_view kUserIds       = "userIds"; /**< AuditDataMap key for signer user IDs */
+    static constexpr std::string_view kUserPubKeys   = "userPubKeys"; /**< AuditDataMap key for signer public keys */
+    static constexpr std::string_view kMasterPub     = "masterPub"; /**< AuditDataMap key for the master public key */
+    static constexpr std::string_view kSessionString = "sessionString"; /**< Benchmark extension key for the session string */
+};
+
+struct IdentityVerifyKeys {
+    static constexpr std::string_view kAggregateSignature = "aggregateSignature"; /**< AuditDataMap key for the aggregate signature Σ */
+    static constexpr std::string_view kMessage            = "message"; /**< AuditDataMap key for the verify message */
+    static constexpr std::string_view kUserIds            = "userIds"; /**< AuditDataMap key for signer user IDs */
+    static constexpr std::string_view kUserPubKeys        = "userPubKeys"; /**< AuditDataMap key for signer public keys */
+    static constexpr std::string_view kMasterPub          = "masterPub"; /**< AuditDataMap key for the master public key */
+    static constexpr std::string_view kSessionString      = "sessionString"; /**< Benchmark extension key for the session string */
+};
 
 /**
  * @brief Measure execution time of a callable in milliseconds
@@ -134,12 +161,12 @@ CAMatrix::Crypto::CryptoArray signWithPrivateKey(
     MessageMetric* messageMetric)
 {
     CAMatrix::Audit::Messages::AuditDataMap signInput;
-    signInput.emplace(std::string(IdentitySignContract::kMessage), message);
-    signInput.emplace(std::string(IdentitySignContract::kUserId), userId);
-    signInput.emplace(std::string(IdentitySignContract::kMasterPub), ctx.masterPub);
-    signInput.emplace(std::string(IdentitySignContract::kUserPriv), userPriv);
+    signInput.emplace(std::string(IdentitySignKeys::kMessage), message);
+    signInput.emplace(std::string(IdentitySignKeys::kUserId), userId);
+    signInput.emplace(std::string(IdentitySignKeys::kMasterPub), ctx.masterPub);
+    signInput.emplace(std::string(IdentitySignKeys::kUserPriv), userPriv);
     if (!sessionString.empty()) {
-        signInput.emplace(std::string(IdentitySignContract::kSessionString), sessionString);
+        signInput.emplace(std::string(IdentitySignKeys::kSessionString), sessionString);
     }
 
     auto algo = ctx.manager->getIdentityAlgorithm(algorithmType);
@@ -333,21 +360,21 @@ bool IdentityVerifyScenario::runIteration()
             aggSig = measureCall(&lastTimings_.aggregate, [&]() {
                 AuditDataMap aggInput;
                 aggInput.emplace(std::string(
-                    IdentityAggregateContract::kMessage), msgBytes);
+                    IdentityAggregateKeys::kMessage), msgBytes);
                 aggInput.emplace(std::string(
-                    IdentityAggregateContract::kSignatures),
+                    IdentityAggregateKeys::kSignatures),
                     sample.signatures);
                 aggInput.emplace(std::string(
-                    IdentityAggregateContract::kUserIds),
+                    IdentityAggregateKeys::kUserIds),
                     sample.userIds);
                 aggInput.emplace(std::string(
-                    IdentityAggregateContract::kUserPubKeys),
+                    IdentityAggregateKeys::kUserPubKeys),
                     sample.userPubKeys);
                 aggInput.emplace(std::string(
-                    IdentityAggregateContract::kSessionString),
+                    IdentityAggregateKeys::kSessionString),
                     sample.sessionString);
                 aggInput.emplace(std::string(
-                    IdentityAggregateContract::kMasterPub),
+                    IdentityAggregateKeys::kMasterPub),
                     ctx_.masterPub);
                 auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
                 auto aggVariant = algo->createRequest(
@@ -370,13 +397,13 @@ bool IdentityVerifyScenario::runIteration()
 
         // ── 2. Aggregate-verify Σ against all signers ──
         AuditDataMap verifyInput;
-        verifyInput.emplace(std::string(IdentityVerifyContract::kAggregateSignature), aggSig);
-        verifyInput.emplace(std::string(IdentityVerifyContract::kMessage), msgBytes);
-        verifyInput.emplace(std::string(IdentityVerifyContract::kMasterPub), ctx_.masterPub);
-        verifyInput.emplace(std::string(IdentityVerifyContract::kUserIds), sample.userIds);
-        verifyInput.emplace(std::string(IdentityVerifyContract::kUserPubKeys), sample.userPubKeys);
+        verifyInput.emplace(std::string(IdentityVerifyKeys::kAggregateSignature), aggSig);
+        verifyInput.emplace(std::string(IdentityVerifyKeys::kMessage), msgBytes);
+        verifyInput.emplace(std::string(IdentityVerifyKeys::kMasterPub), ctx_.masterPub);
+        verifyInput.emplace(std::string(IdentityVerifyKeys::kUserIds), sample.userIds);
+        verifyInput.emplace(std::string(IdentityVerifyKeys::kUserPubKeys), sample.userPubKeys);
         verifyInput.emplace(std::string(
-            IdentityVerifyContract::kSessionString),
+            IdentityVerifyKeys::kSessionString),
             sample.sessionString);
 
         accepted = measureCall(&lastTimings_.aggregateVerify, [&]() {

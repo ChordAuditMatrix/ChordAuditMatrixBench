@@ -72,6 +72,7 @@
 #include <numeric>
 #include <random>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -84,14 +85,41 @@ namespace AuditCore = CAMatrix::Audit::Core;
 namespace AuditMsg  = CAMatrix::Audit::Messages;
 namespace AuditData = CAMatrix::Audit::Data;
 
-// Engine-stage input keys come from the CoreLib stage contracts, so the
-// scenario writes the same strings the strategies parse.
-using KeyGenKeys = AuditMsg::KeyGenerationEngineContract::Env;
-using TagsKeys   = AuditMsg::GenerateTagsEngineContract::Env;
-using MaintKeys  = AuditMsg::MaintenanceEngineContract::Env;
-using ChalKeys   = AuditMsg::ChallengeGenEngineContract::Env;
-using ProveKeys  = AuditMsg::ProofGenEngineContract::Env;
-using VerifyKeys = AuditMsg::ProofVerifyEngineContract::Env;
+// Engine-stage wire keys owned by this scenario: benchmark-local literals
+// that match the strings the engine strategies parse. One descriptor per
+// stage, listing only the keys this producer emits.
+struct KeyGenKeys {
+    static constexpr std::string_view kUserId = "userId"; /**< JSON key for the user identity */
+};
+
+struct TagsKeys {
+    static constexpr std::string_view kBlocks = "blocks"; /**< AuditDataMap key for the block window */
+    static constexpr std::string_view kFileId = "fileId"; /**< AuditDataMap key for the file identity */
+    static constexpr std::string_view kUserId = "userId"; /**< AuditDataMap key for the user identity */
+};
+
+struct MaintKeys {
+    static constexpr std::string_view kFileId       = "fileId"; /**< JSON key for the file identity */
+    static constexpr std::string_view kOpType       = "opType"; /**< JSON key for the maintenance operation type */
+    static constexpr std::string_view kBlockIndices = "blockIndices"; /**< JSON key for the affected block indices */
+};
+
+struct ChalKeys {
+    static constexpr std::string_view kFileId          = "fileId"; /**< JSON key for the file identity */
+    static constexpr std::string_view kBlockCount      = "blockCount"; /**< JSON key for the block count */
+    static constexpr std::string_view kChallengeCount  = "challengeCount"; /**< JSON key for the challenge count */
+    static constexpr std::string_view kUsePseudoRandom = "usePseudoRandom"; /**< JSON key for the PRNG mode */
+};
+
+struct ProveKeys {
+    static constexpr std::string_view kBlocks = "blocks"; /**< AuditDataMap key for the challenged blocks */
+    static constexpr std::string_view kTags   = "tags"; /**< AuditDataMap key for the stored tags */
+};
+
+struct VerifyKeys {
+    static constexpr std::string_view kFileId = "fileId"; /**< JSON key for the file identity */
+    static constexpr std::string_view kUserId = "userId"; /**< JSON key for the user identity */
+};
 
 /// Helper: create a JSON RawInput from a Json::Value
 AuditMsg::RawInput jsonInput(const ::Json::Value& v)
