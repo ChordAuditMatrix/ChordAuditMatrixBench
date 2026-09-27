@@ -31,7 +31,6 @@
  *          --computation <type>          PdpDirect / PdpFixedRatio / PdpInverseConfidence
  *          --iterations <N>              Iterations per combo (default: 10)
  *          --threads <N>                 Parallel worker threads (default: 1; 0 = auto)
- *          --maintenance-ops <N>         Dynamic PDP maintenance ops (default: 0)
  *          --json <path>                 Write JSON report to file
  *          --list-algorithms             List all available algorithms and exit
  *          --help                        Show help message
@@ -81,7 +80,6 @@ static void printUsage(const char* progName)
     spdlog::info("                             PdpFixedRatio        — fixed t/N, r/N ratios, scan N");
     spdlog::info("                             PdpInverseConfidence — target P*, scan N, solve min r");
     spdlog::info("  --threads <N>               Parallel worker threads (default: 1; 0 = auto: hardware_concurrency)");
-    spdlog::info("  --maintenance-ops <N>       Maintenance ops per worker-local dynamic fixture (default: 0)");
     spdlog::info("  --json <path>               Write JSON report to file");
     spdlog::info("  --list-algorithms           List all available algorithms and exit");
     spdlog::info("  --help                      Show this help message");

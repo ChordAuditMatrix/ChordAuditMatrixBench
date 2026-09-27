@@ -4,14 +4,17 @@ Benchmark framework and executables for **ChordAuditMatrix** — PDP audit and i
 
 ## Overview
 
-This repository provides two standalone benchmark executables:
+This repository provides three standalone benchmark executables:
 
 | Executable | Description |
 |---|---|
 | `PdpChordAuditMatrixBench` | PDP (Provable Data Possession) audit benchmark — measures detection confidence rate vs. theoretical hypergeometric probability |
 | `IdentityChordAuditMatrixBench` | Identity verification benchmark — measures verification accuracy rate (TP/FP/TN/FN) |
+| `DynamicMaintenanceChordAuditMatrixBench` | Dynamic PDP maintenance benchmark — measures Update/Insert/Delete call latency and success/failure totals |
 
-Both executables support single-run and parameter-sweep modes.
+The PDP and identity executables support single-run and parameter-sweep modes.
+The maintenance executable is single-run: one maintenance call per iteration,
+partitioned across workers.
 
 ## Build Modes
 
@@ -70,6 +73,44 @@ add_subdirectory(3rdparty/ChordAuditMatrixBench EXCLUDE_FROM_ALL)
 --help                      Show help message
 ```
 
+### Dynamic Maintenance Benchmark
+
+```
+--algorithm <type>          Dynamic strategy type (default: DHTDynamic)
+--strategy-path <dir>       Strategy library directory for hot-loading
+--operation <type>          update | insert | delete (default: update)
+--initial-blocks <N>        Blocks pre-filled in each worker's StateStore
+                            (default: 1000; delete needs N >= the largest
+                            worker's iteration share)
+--iterations <N>            Total maintenance calls across all workers
+--threads <N>               Worker count (0 = hardware concurrency)
+--seed <N>                  Seed the benchmark PRNG (index selection is
+                            deterministic; accepted for CLI parity)
+--json <path>               Write JSON report to file
+--help                      Show help message
+```
+
+Iteration semantics — exactly one maintenance call per iteration, on legal
+1-based block indices of the worker's own store:
+
+- **Update** — round-robin over the initial blocks (`1..initialBlocks`);
+- **Insert** — append at the current block count + 1;
+- **Delete** — drop the current last block, consuming the store tail-first.
+
+Each worker creates its own engine, operation context and StateStore from the
+shared dynamic strategy, so iterations are independent and partition across
+`--threads`. A rejected operation is counted as a failure (exit code 2), not
+thrown. Delete configs whose `--initial-blocks` cannot cover the largest
+worker's share are rejected up front (exit code 1).
+
+Reported metrics: per-operation success/failure totals, the final block count
+summed over all worker stores (Update keeps it at `initialBlocks × threads`,
+Insert adds one per successful insert, Delete removes one per successful
+delete), total and average maintenance call time (aggregated across workers),
+setup timings, end-to-end wall time and an end-to-end throughput whose
+denominator is the whole run (setup + iterations + teardown). Maintenance benchmarking lives in this
+executable only — PDP audit iterations never run maintenance.
+
 ### Online Identity Algorithms (session-coordinated)
 
 Algorithms whose `kind() == Online` (derived from
@@ -111,14 +152,19 @@ ChordAuditMatrixBench/
 │   ├── benchmark_runner.h
 │   ├── benchmark_scenario.h
 │   ├── benchmark_types.h
+│   ├── dynamic_maintenance_report.h
+│   ├── dynamic_maintenance_scenario.h
 │   ├── metrics_collector.h
 │   ├── pdp_audit_scenario.h
 │   └── identity_verify_scenario.h
 ├── source/
 │   ├── pdp_audit_scenario.cpp
+│   ├── dynamic_maintenance_scenario.cpp
+│   ├── dynamic_maintenance_report.cpp
 │   └── identity_verify_scenario.cpp
 └── app/
     ├── pdp_audit_benchmark_main.cpp
+    ├── dynamic_maintenance_benchmark_main.cpp
     └── identity_verify_benchmark_main.cpp
 ```
 

@@ -48,6 +48,8 @@ endif()
 set(FRAMEWORK_SOURCE
     source/pdp_audit_scenario.cpp
     source/identity_verify_scenario.cpp
+    source/dynamic_maintenance_scenario.cpp
+    source/dynamic_maintenance_report.cpp
     source/benchmark_report.cpp
     source/benchmark_computation_strategy.cpp
 )
@@ -70,8 +72,13 @@ target_link_libraries(Pdp${PROJECT_NAME} PRIVATE ${PROJECT_NAME} spdlog::spdlog)
 add_executable(Identity${PROJECT_NAME} app/identity_verify_benchmark_main.cpp)
 target_link_libraries(Identity${PROJECT_NAME} PRIVATE ${PROJECT_NAME} spdlog::spdlog)
 
+# ==================== Dynamic Maintenance Benchmark ====================
+add_executable(DynamicMaintenance${PROJECT_NAME} app/dynamic_maintenance_benchmark_main.cpp)
+target_link_libraries(DynamicMaintenance${PROJECT_NAME} PRIVATE ${PROJECT_NAME} spdlog::spdlog)
+
 # ==================== Deploy (in-tree only) ====================
 if(NOT CAM_STANDALONE AND COMMAND cam_deploy_benchmark)
     cam_deploy_benchmark(Pdp${PROJECT_NAME})
     cam_deploy_benchmark(Identity${PROJECT_NAME})
+    cam_deploy_benchmark(DynamicMaintenance${PROJECT_NAME})
 endif()
