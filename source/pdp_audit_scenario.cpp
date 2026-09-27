@@ -282,11 +282,14 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
             auto blockIdx = blockIdxDist(rng);
             auto opType = static_cast<AuditMsg::MaintenanceOpType>(opTypeDist(rng));
 
+            // The StateStore maintenance APIs take 1-based block indices.
+            const auto blockIndex = static_cast<::Json::UInt64>(blockIdx + 1);
+
             ::Json::Value maintainJson;
             maintainJson[MaintKeys::kFileId] = ctx_.fileId;
             maintainJson[MaintKeys::kOpType] = static_cast<int>(opType);
             maintainJson[MaintKeys::kBlockIndices] = ::Json::Value(::Json::arrayValue);
-            maintainJson[MaintKeys::kBlockIndices].append(static_cast<::Json::UInt64>(blockIdx));
+            maintainJson[MaintKeys::kBlockIndices].append(blockIndex);
 
             AuditCore::AuditOperationContext maintainCtx;
             maintainCtx.strategy = strategy;
@@ -294,23 +297,11 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
             maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
             maintainCtx.generateKeysResult = ctx_.opCtx->generateKeysResult;
 
-            if (opType == AuditMsg::MaintenanceOpType::Insert) {
-                auto newBlockData = std::vector<std::uint8_t>(cfg.blockSize, 0xAB);
-                auto newBlockSource = std::make_shared<AuditData::MemoryAuditBlockSource>(
-                    std::vector<std::vector<std::uint8_t>>{newBlockData},
-                    cfg.blockSize, 0);
-
-                auto newTagsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
-                newTagsDataMap->emplace(std::string(TagsKeys::kBlocks), AuditData::AuditBlockSourcePtr(newBlockSource));
-                newTagsDataMap->emplace(std::string(TagsKeys::kFileId), ctx_.fileId);
-                newTagsDataMap->emplace(std::string(TagsKeys::kUserId), ctx_.userId);
-
-                measureTiming(ctx_.setupTimings.generateTags, [&]() {
-                    ctx_.engine->generateTags(
-                        AuditMsg::RawInput(newTagsDataMap), maintainCtx);
-                });
-            }
-
+            // Maintenance only updates StateStore metadata. In production the
+            // affected tags are regenerated afterwards by the Admin pass that
+            // reads firstAffectedBlockIndex (see MaintainAuditUseCase), so the
+            // benchmark does not fabricate throw-away tags here. Until that
+            // regeneration runs, audits may detect the shifted or stale tags.
             measureTiming(ctx_.setupTimings.maintain, [&]() {
                 ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
             });
