@@ -14,7 +14,14 @@ include(CheckCXXSourceCompiles)
 # Standalone: statically compile-link CoreLib (and its transitive deps).
 # In-tree: ChordAuditMatrixLib target is already provided by the parent project.
 if(CAM_STANDALONE)
+    # CoreLib's own test suite has its own CI; skip its test registration while
+    # configuring it as a dependency and restore Bench's option afterwards.
+    # (The parent project uses the same save/restore pattern for its lib/.)
+    set(CAM_BENCH_BUILD_TESTS_SAVED "${CAM_BUILD_TESTS}")
+    set(CAM_BUILD_TESTS OFF CACHE BOOL "CoreLib tests are in CoreLib CI" FORCE)
     add_subdirectory(3rdparty/CoreLib EXCLUDE_FROM_ALL)
+    set(CAM_BUILD_TESTS "${CAM_BENCH_BUILD_TESTS_SAVED}" CACHE BOOL "Build tests" FORCE)
+    unset(CAM_BENCH_BUILD_TESTS_SAVED)
 endif()
 
 # ==================== Sanitizer ====================
@@ -75,6 +82,17 @@ target_link_libraries(Identity${PROJECT_NAME} PRIVATE ${PROJECT_NAME} spdlog::sp
 # ==================== Dynamic Maintenance Benchmark ====================
 add_executable(DynamicMaintenance${PROJECT_NAME} app/dynamic_maintenance_benchmark_main.cpp)
 target_link_libraries(DynamicMaintenance${PROJECT_NAME} PRIVATE ${PROJECT_NAME} spdlog::spdlog)
+
+# ==================== Tests ====================
+# Framework tests the Bench repository owns: MetricsCollector aggregation, the
+# runner's BenchmarkRunPlan scheduling, the shared stage timer, the Report
+# hierarchy and the Scenario defaults. They link CoreLib only — tests that need
+# the real DHT/SM9 strategy plugins stay in the parent repository's integration
+# suite, since Bench does not depend on those submodules.
+if(CAM_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # ==================== Deploy (in-tree only) ====================
 if(NOT CAM_STANDALONE AND COMMAND cam_deploy_benchmark)

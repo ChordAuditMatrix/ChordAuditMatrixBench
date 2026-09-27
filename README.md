@@ -29,6 +29,20 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
+The framework unit tests (MetricsCollector aggregation, run scheduling, the
+shared stage timer, the Report hierarchy, Scenario defaults) build with
+`CAM_BUILD_TESTS=ON` and run under CTest in the same build tree:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCAM_BUILD_TESTS=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+```
+
+Tests that need the real `DHTDynamicAuditStrategy` / `SM9StaticAuditStrategy`
+plugins stay in the parent ChordAuditMatrix repository, which is where those
+submodules live.
+
 ### In-tree (`CAM_STANDALONE=OFF`)
 
 Used when included as a submodule of the main ChordAuditMatrix project. `ChordAuditMatrixLib` target already exists; benchmarks are deployed to `dist/bench/`.
@@ -147,10 +161,12 @@ ChordAuditMatrixBench/
 ├── .github/workflows/ci.yml
 ├── 3rdparty/CoreLib/          (git submodule)
 ├── include/ChordAuditMatrixBench/
+│   ├── benchmark_computation_strategy.h
 │   ├── benchmark_config.h
 │   ├── benchmark_report.h
 │   ├── benchmark_runner.h
 │   ├── benchmark_scenario.h
+│   ├── benchmark_timing.h
 │   ├── benchmark_types.h
 │   ├── dynamic_maintenance_report.h
 │   ├── dynamic_maintenance_scenario.h
@@ -161,7 +177,10 @@ ChordAuditMatrixBench/
 │   ├── pdp_audit_scenario.cpp
 │   ├── dynamic_maintenance_scenario.cpp
 │   ├── dynamic_maintenance_report.cpp
+│   ├── benchmark_report.cpp
+│   ├── benchmark_computation_strategy.cpp
 │   └── identity_verify_scenario.cpp
+├── tests/                    (CAM_BUILD_TESTS=ON framework unit tests)
 └── app/
     ├── pdp_audit_benchmark_main.cpp
     ├── dynamic_maintenance_benchmark_main.cpp

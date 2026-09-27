@@ -108,7 +108,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCAM_BUILD_TESTS=OFF \
+            -DCAM_BUILD_TESTS=ON \
             -DCAM_GENERATE_DOCS=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 
@@ -122,16 +122,21 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl `
             -DCMAKE_CXX_COMPILER=clang-cl `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCAM_BUILD_TESTS=OFF `
+            -DCAM_BUILD_TESTS=ON `
             -DCAM_GENERATE_DOCS=OFF
 
-      - name: Build benchmark executables
+      - name: Build benchmarks and tests
         shell: bash
         run: |
-          cmake --build build --parallel \
-            --target PdpChordAuditMatrixBench \
-            --target IdentityChordAuditMatrixBench \
-            --target DynamicMaintenanceChordAuditMatrixBench
+          cmake --build build --parallel
+
+      # ── Test (Bench framework unit tests) ──
+
+      - name: Run tests
+        shell: bash
+        working-directory: build
+        run: |
+          ctest --output-on-failure -j4
 
       # ── Package (tag pushes only) ──
 
