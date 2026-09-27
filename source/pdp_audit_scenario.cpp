@@ -42,7 +42,6 @@
 
 // ── Framework ──
 #include <ChordAuditMatrixBench/benchmark_types.h>
-#include <ChordAuditMatrixBench/dynamic_strategy_execution_coordinator.h>
 
 // ── Engine interface ──
 #include "ChordAuditMatrixLib/interfaces/audit/engine.h"
@@ -154,26 +153,6 @@ void measureTiming(TimingMetric& metric, Func&& fn)
               std::chrono::duration<double, std::milli>(end - start).count());
 }
 
-template<typename Operation>
-void executeWithDynamicStateStore(
-    const std::shared_ptr<DynamicStrategyExecutionCoordinator>& coordinator,
-    const std::shared_ptr<AuditCore::DynamicAuditStrategy>& strategy,
-    const std::shared_ptr<AuditCore::DynamicPdpStateStore>& stateStore,
-    Operation&& operation)
-{
-    if (coordinator) {
-        if (!coordinator->coordinates(strategy)) {
-            throw std::logic_error(
-                "PdpAuditScenario: coordinator and dynamic strategy do not match");
-        }
-        coordinator->execute(stateStore, std::forward<Operation>(operation));
-        return;
-    }
-
-    strategy->setStateStore(stateStore);
-    std::forward<Operation>(operation)();
-}
-
 } // anonymous namespace
 
 // ==================================================================
@@ -182,11 +161,9 @@ void executeWithDynamicStateStore(
 
 PdpAuditScenario::PdpAuditScenario(
     const std::string& algorithmType,
-    std::shared_ptr<AuditCore::AuditStrategyManager> strategyManager,
-    std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator)
+    std::shared_ptr<AuditCore::AuditStrategyManager> strategyManager)
     : algorithmType_(algorithmType)
     , strategyManager_(std::move(strategyManager))
-    , dynamicCoordinator_(std::move(dynamicCoordinator))
 {
 }
 
@@ -208,12 +185,9 @@ bool PdpAuditScenario::supportsParallelIterations() const
     if (!strategyManager_) {
         return false;
     }
-    auto strategy = strategyManager_->getStrategy(algorithmType_);
-    if (!strategy) {
-        return false;
-    }
-    return strategy->kind() != AuditCore::StrategyKind::Dynamic
-        || dynamicCoordinator_ != nullptr;
+    // The engine and the strategy are stateless per operation: each worker's
+    // scenario owns its StateStore and binds it on its own operation contexts.
+    return static_cast<bool>(strategyManager_->getStrategy(algorithmType_));
 }
 
 // ==================================================================
@@ -238,10 +212,11 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
     // Cache strategy kind for O(1) dispatch in subsequent operations
     ctx_.strategyKind = strategy->kind();
 
-    // Step 2: Create engine and set strategy
+    // Step 2: Create engine and bind the strategy to the setup context
     ctx_.engine = AuditCore::AuditEngineFactory::createInstance();
-    ctx_.engine->setStrategy(strategy);
+    ctx_.strategy = strategy;
     ctx_.opCtx = std::make_unique<AuditCore::AuditOperationContext>();
+    ctx_.opCtx->strategy = strategy;
 
     // Step 3: Generate deterministic data blocks
     ctx_.userId = "benchmark@" + algorithmType_;
@@ -271,14 +246,11 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
             throw std::logic_error(
                 "PdpAuditScenario: strategy kind is Dynamic but dynamic_pointer_cast failed");
         }
-        if (dynamicCoordinator_ &&
-            !dynamicCoordinator_->coordinates(dynamicStrategy_)) {
-            throw std::logic_error(
-                "PdpAuditScenario: coordinator and dynamic strategy do not match");
-        }
-
-        ctx_.stateStore = ctx_.engine->createStateStore();
+        // This scenario owns its StateStore; every dynamic operation carries it
+        // on the operation context (the strategy keeps no store of its own).
+        ctx_.stateStore = ctx_.engine->createStateStore(strategy);
         ctx_.stateStore->addFile(ctx_.fileId, cfg.totalBlocks);
+        ctx_.opCtx->stateStore = ctx_.stateStore;
     } else {
         dynamicStrategy_.reset();
     }
@@ -288,17 +260,9 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
     tagsDataMap->emplace(std::string(TagsKeys::kBlocks), AuditData::AuditBlockSourcePtr(ctx_.originalBlocks));
     tagsDataMap->emplace(std::string(TagsKeys::kFileId), ctx_.fileId);
     tagsDataMap->emplace(std::string(TagsKeys::kUserId), ctx_.userId);
-    auto generateTags = [&]() {
-        measureTiming(ctx_.setupTimings.generateTags, [&]() {
-            ctx_.engine->generateTags(AuditMsg::RawInput(tagsDataMap), *ctx_.opCtx);
-        });
-    };
-    if (dynamicStrategy_) {
-        executeWithDynamicStateStore(
-            dynamicCoordinator_, dynamicStrategy_, ctx_.stateStore, generateTags);
-    } else {
-        generateTags();
-    }
+    measureTiming(ctx_.setupTimings.generateTags, [&]() {
+        ctx_.engine->generateTags(AuditMsg::RawInput(tagsDataMap), *ctx_.opCtx);
+    });
     ctx_.tags = ctx_.opCtx->generateTagsResult->tags;
     if (ctx_.tags) {
         const auto serialized = ctx_.tags->serialize();
@@ -325,6 +289,8 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
             maintainJson[MaintKeys::kBlockIndices].append(static_cast<::Json::UInt64>(blockIdx));
 
             AuditCore::AuditOperationContext maintainCtx;
+            maintainCtx.strategy = strategy;
+            maintainCtx.stateStore = ctx_.stateStore;
             maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
             maintainCtx.generateKeysResult = ctx_.opCtx->generateKeysResult;
 
@@ -339,21 +305,15 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
                 newTagsDataMap->emplace(std::string(TagsKeys::kFileId), ctx_.fileId);
                 newTagsDataMap->emplace(std::string(TagsKeys::kUserId), ctx_.userId);
 
-                executeWithDynamicStateStore(
-                    dynamicCoordinator_, dynamicStrategy_, ctx_.stateStore, [&]() {
-                        measureTiming(ctx_.setupTimings.generateTags, [&]() {
-                            ctx_.engine->generateTags(
-                                AuditMsg::RawInput(newTagsDataMap), maintainCtx);
-                        });
-                    });
+                measureTiming(ctx_.setupTimings.generateTags, [&]() {
+                    ctx_.engine->generateTags(
+                        AuditMsg::RawInput(newTagsDataMap), maintainCtx);
+                });
             }
 
-            executeWithDynamicStateStore(
-                dynamicCoordinator_, dynamicStrategy_, ctx_.stateStore, [&]() {
-                    measureTiming(ctx_.setupTimings.maintain, [&]() {
-                        ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
-                    });
-                });
+            measureTiming(ctx_.setupTimings.maintain, [&]() {
+                ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
+            });
         }
     }
 }
@@ -450,6 +410,8 @@ bool PdpAuditScenario::runIteration()
     // Create a fresh operation context for this iteration
     // (reuse engine, keys, and tags from setup)
     AuditCore::AuditOperationContext iterCtx;
+    iterCtx.strategy = ctx_.strategy;
+    iterCtx.stateStore = ctx_.stateStore;  // null for static strategies
 
     // Copy key/tag state from the setup context into the iteration context
     iterCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
@@ -468,17 +430,9 @@ bool PdpAuditScenario::runIteration()
         chalJson[ChalKeys::kBlockCount] = static_cast<::Json::UInt64>(
             ctx_.corruptedBlocks->availableBlockCount());
     }
-    auto generateChallenges = [&]() {
-        measureTiming(lastTimings_.generateChallenges, [&]() {
-            ctx_.engine->generateChallenges(jsonInput(chalJson), iterCtx);
-        });
-    };
-    if (dynamicStrategy_) {
-        executeWithDynamicStateStore(
-            dynamicCoordinator_, dynamicStrategy_, ctx_.stateStore, generateChallenges);
-    } else {
-        generateChallenges();
-    }
+    measureTiming(lastTimings_.generateChallenges, [&]() {
+        ctx_.engine->generateChallenges(jsonInput(chalJson), iterCtx);
+    });
 
     // Step 2: Generate proofs using corrupted blocks + original tags
     auto proofsDataMap = std::make_shared<AuditMsg::AuditDataMap>();
@@ -592,6 +546,7 @@ void PdpAuditScenario::teardown()
     ctx_.corruptedIndices.clear();
     ctx_.staleIndices.clear();
     ctx_.stateStore.reset();
+    ctx_.strategy.reset();
     dynamicStrategy_.reset();
     ctx_.userId.clear();
     ctx_.fileId.clear();

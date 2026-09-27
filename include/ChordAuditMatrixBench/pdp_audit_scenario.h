@@ -31,7 +31,7 @@
  *          - Iteration: genChallenges → genProofs → verifyProofs
  *
  *          For dynamic strategies (DHTDynamic), the pipeline is:
- *          - Setup: initAlgo → genKeys → genTags → inject StateStore
+ *          - Setup: initAlgo → genKeys → genTags (context carries the StateStore)
  *          - Maintenance: perform Update/Insert/Delete ops via engine.maintain()
  *          - Stale versions: mark blocks as stale in StateStore (version mismatch)
  *          - Iteration: genChallenges → genProofs → verifyProofs
@@ -58,6 +58,7 @@
 namespace CAMatrix::Audit::Core {
 class AuditEngine;
 class AuditOperationContext;
+class AuditStrategy;
 class AuditStrategyManager;
 class DynamicAuditStrategy;
 class DynamicPdpStateStore;
@@ -75,7 +76,6 @@ using TagsPtr = std::shared_ptr<Tags>;
 } // namespace CAMatrix::Audit::Messages
 
 namespace CAMatrix::Audit::Benchmark {
-class DynamicStrategyExecutionCoordinator;
 
 /**
  * @struct PdpScenarioContext
@@ -86,6 +86,7 @@ class DynamicStrategyExecutionCoordinator;
  */
 struct PdpScenarioContext {
     std::shared_ptr<CAMatrix::Audit::Core::AuditEngine> engine; /**< Audit engine instance */
+    std::shared_ptr<CAMatrix::Audit::Core::AuditStrategy> strategy; /**< Strategy bound to every operation context */
     std::unique_ptr<CAMatrix::Audit::Core::AuditOperationContext> opCtx; /**< Setup-stage operation context */
 
     CAMatrix::Audit::Data::AuditBlockSourcePtr originalBlocks; /**< Original (uncorrupted) block source */
@@ -141,13 +142,13 @@ public:
      * @brief Construct a PDP audit scenario
      * @param algorithmType Algorithm identifier (e.g., "SM9Static")
      * @param strategyManager Shared manager containing the selected strategy
-     * @param dynamicCoordinator Shared coordinator for parallel dynamic scenarios;
-     *        omit for static scenarios and direct serial use
+     * @details The strategy is shared read-only across workers: every operation
+     *          carries its own strategy + StateStore on its
+     *          AuditOperationContext, so parallel iterations need no coordinator.
      */
     PdpAuditScenario(
         const std::string& algorithmType,
-        std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager,
-        std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator = {});
+        std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager);
 
     ~PdpAuditScenario() override = default;
 
@@ -157,8 +158,9 @@ public:
     /// @return Algorithm type string
     std::string algorithmType() const override;
     /// @brief Whether one run's iterations can be partitioned across workers
-    /// @return true for static PDP and for dynamic PDP when a shared
-    ///         StateStore execution coordinator was supplied
+    /// @return true for both static and dynamic PDP: the engine and strategy are
+    ///         stateless per operation, and each worker's scenario carries its
+    ///         own StateStore on its own contexts
     bool supportsParallelIterations() const override;
     /// @brief One-time setup: init engine, generate keys/tags, build block source
     /// @param config PDP benchmark configuration
@@ -242,7 +244,6 @@ public:
 private:
     std::string algorithmType_;
     std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager_;
-    std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator_;
     std::shared_ptr<CAMatrix::Audit::Core::DynamicAuditStrategy> dynamicStrategy_;
     PdpScenarioContext ctx_;
     PdpAuditConfig config_;

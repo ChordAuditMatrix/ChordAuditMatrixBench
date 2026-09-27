@@ -44,13 +44,11 @@
 #include <ChordAuditMatrixBench/benchmark_computation_strategy.h>
 #include <ChordAuditMatrixBench/benchmark_runner.h>
 #include <ChordAuditMatrixBench/benchmark_types.h>
-#include <ChordAuditMatrixBench/dynamic_strategy_execution_coordinator.h>
 #include <ChordAuditMatrixBench/pdp_audit_scenario.h>
 
 #include "ChordAuditMatrixLib/implementations/audit/in_memory_audit_strategy_manager.h"
 #include "ChordAuditMatrixLib/implementations/base/loader/algorithm_hot_load_decorator.h"
 #include "ChordAuditMatrixLib/interfaces/audit/strategy.h"
-#include "ChordAuditMatrixLib/interfaces/audit/dynamic_strategy.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -249,28 +247,17 @@ int main(int argc, char* argv[])
 
     // ── Create the benchmark runner with a PDP scenario factory ──
     // Dynamic workers share the stateless strategy but bind their own
-    // StateStore through one coordinator for each dependent operation.
-    std::shared_ptr<DynamicStrategyExecutionCoordinator> dynamicCoordinator;
+    // StateStore on each operation context, so no coordinator is needed.
     auto selectedStrategy = strategyManager->getStrategy(algorithmType);
-    if (selectedStrategy->kind() ==
-        CAMatrix::Audit::Core::StrategyKind::Dynamic) {
-        auto dynamicStrategy = std::dynamic_pointer_cast<
-            CAMatrix::Audit::Core::DynamicAuditStrategy>(selectedStrategy);
-        if (!dynamicStrategy) {
-            spdlog::error(
-                "Algorithm '{}' reports Dynamic kind but does not implement "
-                "DynamicAuditStrategy", algorithmType);
-            return 1;
-        }
-        dynamicCoordinator =
-            std::make_shared<DynamicStrategyExecutionCoordinator>(
-                std::move(dynamicStrategy));
+    if (!selectedStrategy) {
+        spdlog::error("Algorithm '{}' could not be resolved to a strategy", algorithmType);
+        return 1;
     }
 
     BenchmarkRunner runner(BenchmarkScenarioFactory(
-        [algorithmType, strategyManager, dynamicCoordinator]() {
+        [algorithmType, strategyManager]() {
             return std::make_unique<PdpAuditScenario>(
-                algorithmType, strategyManager, dynamicCoordinator);
+                algorithmType, strategyManager);
         }));
 
     // ── Factory-create the computation strategy ──
