@@ -18,11 +18,14 @@
 /**
  * @file dynamic_maintenance_report.h
  * @brief Console/JSON reporting for the dynamic maintenance benchmark
- * @details Formats a DynamicMaintenanceResult into the human-readable console
- *          report and the machine-readable JSON report. Both expose the
- *          operation, per-worker initial block count, success/failure totals,
- *          the aggregated maintenance call timing and the whole-run wall time
- *          with its end-to-end rate — no PDP audit metrics.
+ * @details Renders a DynamicMaintenanceResult through the framework's Report
+ *          interface — the same polymorphic contract as the PDP and identity
+ *          reports — so the maintenance CLI prints and serialises results
+ *          through Report::toConsole()/Report::toJson() like every other
+ *          benchmark. Both outputs expose the operation, per-worker initial
+ *          block count, success/failure totals, the aggregated maintenance call
+ *          timing and the whole-run wall time with its end-to-end rate — no PDP
+ *          audit metrics.
  * @author Dylan Liu
  * @version 1.0.0
  * @date 2026-09-27
@@ -31,29 +34,43 @@
 #ifndef CAMATRIX_AUDIT_DYNAMIC_MAINTENANCE_REPORT_H
 #define CAMATRIX_AUDIT_DYNAMIC_MAINTENANCE_REPORT_H
 
+#include <ChordAuditMatrixBench/benchmark_report.h>
 #include <ChordAuditMatrixBench/benchmark_types.h>
 
 #include <string>
 
 namespace CAMatrix::Audit::Benchmark {
 
-/// @brief Stable display name of a maintenance operation
-/// @param operation Operation to name
-/// @return "Update", "Insert" or "Delete"
-/// @throws std::invalid_argument When @p operation is not one of the three
-std::string maintenanceOperationName(MaintenanceOperation operation);
+/**
+ * @class DynamicMaintenanceReport
+ * @brief Report for the dynamic maintenance strategy
+ * @details Formats the single DynamicMaintenanceResult of a maintenance run:
+ *          operation, per-worker initial block count, call totals, aggregated
+ *          maintenance timing and the whole-run wall time / end-to-end
+ *          throughput. The result is referenced, not copied — it must outlive
+ *          the report.
+ */
+class DynamicMaintenanceReport final : public Report {
+public:
+    /**
+     * @brief Construct a maintenance report for one result
+     * @param result Maintenance result to report
+     */
+    explicit DynamicMaintenanceReport(const DynamicMaintenanceResult& result)
+        : result_(result)
+    {}
 
-/// @brief Renders the aligned console report for a maintenance run
-/// @param result Maintenance result to report
-/// @return Multi-line console report
-std::string dynamicMaintenanceConsoleReport(
-    const DynamicMaintenanceResult& result);
+    /// @brief Render the aligned console report
+    /// @return Multi-line console report
+    std::string toConsole() const override;
 
-/// @brief Renders the indented JSON report for a maintenance run
-/// @param result Maintenance result to report
-/// @return JSON document terminated by a newline
-std::string dynamicMaintenanceJsonReport(
-    const DynamicMaintenanceResult& result);
+    /// @brief Render the indented JSON report
+    /// @return JSON document terminated by a newline
+    std::string toJson() const override;
+
+private:
+    const DynamicMaintenanceResult& result_; /**< Result being reported (not owned) */
+};
 
 } // namespace CAMatrix::Audit::Benchmark
 

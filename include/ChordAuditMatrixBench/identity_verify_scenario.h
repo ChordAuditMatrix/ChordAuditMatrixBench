@@ -172,14 +172,14 @@ public:
      */
     void setup(const BenchmarkConfig& config) override;
 
-    /// @brief Identity: no pre-iteration preparation needed
-    void prepare(const BenchmarkConfig& /*config*/) override {}
-
     /**
      * @brief Run one iteration: verify all test samples, compute TP/FP/TN/FN
-     * @return true if iteration completed successfully
+     * @details The per-sample outcomes reach the result through
+     *          recordIteration(); the last-iteration counters stay readable
+     *          through lastTrueAccepts()/lastFalseAccepts()/lastTrueRejects()/
+     *          lastFalseRejects().
      */
-    bool runIteration() override;
+    void runIteration() override;
     /// @brief Records per-sample TP/FP/TN/FN outcomes from the last iteration
     /// @param collector MetricsCollector to record into
     void recordIteration(MetricsCollector& collector) override;

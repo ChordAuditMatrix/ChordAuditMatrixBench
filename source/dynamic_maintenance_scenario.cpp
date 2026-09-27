@@ -23,11 +23,14 @@
  *          StateStore of a dynamic strategy.
  *
  *          Lifecycle of one worker (one scenario instance, one runner slot):
+ *          - validateRun(): reject a Delete config whose initialBlocks cannot
+ *            cover the largest slot of the runner's plan.
  *          - setup(): resolve the strategy, create the worker's own engine,
  *            initialize the algorithm, generate keys and build a StateStore
  *            pre-filled with initialBlocks blocks; the operation context keeps
  *            that engine + strategy + StateStore worker-local.
- *          - prepare(): no-op — the maintenance benchmark needs no corruption.
+ *          - prepare(): inherited no-op — the maintenance benchmark needs no
+ *            corruption.
  *          - runIteration(): one maintenance call on a legal 1-based block
  *            index (Update: round-robin over the initial blocks; Insert: the
  *            append slot count + 1; Delete: the current last block). A failed
@@ -38,9 +41,9 @@
  *          The strategy instance is shared read-only across workers (resolved
  *          from the AuditStrategyManager), while engine, context and StateStore
  *          are per worker — so iterations are independent and the runner may
- *          partition them (see supportsParallelIterations()). Delete configs
- *          are rejected in setup() when any worker's delete range could exhaust
- *          its store (initialBlocks < max iterations of a single worker).
+ *          partition them (see supportsParallelIterations()). validateRun()
+ *          rejects a Delete plan whose largest slot would exhaust a worker's
+ *          store (initialBlocks < plan.largestSlotCount()).
  *
  * @author Dylan Liu
  * @version 1.0.0
@@ -48,6 +51,7 @@
  */
 
 #include <ChordAuditMatrixBench/dynamic_maintenance_scenario.h>
+#include <ChordAuditMatrixBench/benchmark_timing.h>
 #include <ChordAuditMatrixBench/metrics_collector.h>
 
 #include <ChordAuditMatrixLib/interfaces/audit/messages/raw_input.h>
@@ -57,12 +61,9 @@
 #include <json/json.h>
 #include <spdlog/spdlog.h>
 
-#include <algorithm>
-#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 
 namespace CAMatrix::Audit::Benchmark {
@@ -74,47 +75,6 @@ Messages::RawInput jsonInput(const Json::Value& value)
 {
     return Messages::RawInput(
         std::make_shared<std::string>(Json::FastWriter().write(value)));
-}
-
-/// Adds one measured call to a metric: sums the elapsed time, counts the call
-/// and recomputes the average from the accumulated totals.
-void accumulateTiming(TimingMetric& metric,
-                      std::chrono::steady_clock::time_point start)
-{
-    metric.totalMs += std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - start).count();
-    ++metric.callCount;
-    metric.averageMs = metric.totalMs / static_cast<double>(metric.callCount);
-}
-
-/// Times one action into @p metric; a throwing action still counts as a call.
-template<class F>
-void measure(TimingMetric& metric, F&& action)
-{
-    const auto start = std::chrono::steady_clock::now();
-    try {
-        action();
-    } catch (...) {
-        accumulateTiming(metric, start);
-        throw;
-    }
-    accumulateTiming(metric, start);
-}
-
-/// Mirrors the BenchmarkRunner iteration split: requested threads (0 = the
-/// hardware concurrency the runner resolves), clamped to the iteration count,
-/// then the balanced slot sizes — the largest slot is what a single worker can
-/// be asked to execute.
-std::size_t maximumWorkerIterations(const BenchmarkConfig& config)
-{
-    const auto hardware = std::thread::hardware_concurrency();
-    const std::size_t requested = config.threads == 0
-        ? (hardware == 0 ? 1 : hardware)
-        : config.threads;
-    const std::size_t effective = std::min(
-        requested, std::max<std::size_t>(config.iterations, 1));
-    return config.iterations / effective
-        + (config.iterations % effective != 0 ? 1 : 0);
 }
 
 } // namespace
@@ -151,6 +111,33 @@ std::string DynamicMaintenanceScenario::algorithmType() const
     return algorithmType_;
 }
 
+void DynamicMaintenanceScenario::validateRun(const BenchmarkConfig& config,
+                                            const BenchmarkRunPlan& plan)
+{
+    const auto* maintenanceConfig =
+        dynamic_cast<const DynamicMaintenanceConfig*>(&config);
+    if (!maintenanceConfig) {
+        throw std::invalid_argument(
+            "DynamicMaintenanceScenario requires a DynamicMaintenanceConfig");
+    }
+    if (maintenanceConfig->operation != MaintenanceOperation::Delete) {
+        return;
+    }
+    // Delete consumes one existing block per iteration, so every worker's
+    // delete range must fit inside that worker's own store. The plan is the
+    // runner's own split of the iterations into balanced contiguous slots, so
+    // the largest slot is exactly what one worker can be asked to execute.
+    const std::size_t largestWorkerRange = plan.largestSlotCount();
+    if (maintenanceConfig->initialBlocks < largestWorkerRange) {
+        throw std::invalid_argument(
+            "DynamicMaintenanceScenario: initialBlocks (" +
+            std::to_string(maintenanceConfig->initialBlocks) +
+            ") is smaller than the largest worker delete range (" +
+            std::to_string(largestWorkerRange) +
+            "); raise --initial-blocks or lower --iterations/--threads");
+    }
+}
+
 void DynamicMaintenanceScenario::setup(const BenchmarkConfig& config)
 {
     const auto* maintenanceConfig =
@@ -163,20 +150,6 @@ void DynamicMaintenanceScenario::setup(const BenchmarkConfig& config)
     if (config_.initialBlocks == 0) {
         throw std::invalid_argument(
             "DynamicMaintenanceScenario: initialBlocks must be greater than zero");
-    }
-    // Delete consumes one existing block per iteration, so every worker's
-    // delete range must fit inside that worker's own store. The runner splits
-    // the iterations into balanced contiguous slots; the largest slot is what
-    // bounds the capacity check below.
-    const std::size_t largestWorkerRange = maximumWorkerIterations(config_);
-    if (config_.operation == MaintenanceOperation::Delete
-        && config_.initialBlocks < largestWorkerRange) {
-        throw std::invalid_argument(
-            "DynamicMaintenanceScenario: initialBlocks (" +
-            std::to_string(config_.initialBlocks) +
-            ") is smaller than the largest worker delete range (" +
-            std::to_string(largestWorkerRange) +
-            "); raise --initial-blocks or lower --iterations/--threads");
     }
     if (!strategyManager_->hasAlgorithm(algorithmType_)) {
         throw std::invalid_argument(
@@ -197,13 +170,13 @@ void DynamicMaintenanceScenario::setup(const BenchmarkConfig& config)
     lastTimings_ = StageTimings{};
     lastSucceeded_ = false;
 
-    measure(setupTimings_.initAlgorithm, [&] {
+    measureTiming(setupTimings_.initAlgorithm, [&] {
         engine_->initializeAlgorithm(Messages::RawInput{}, baseContext_);
     });
 
     Json::Value keyInput;
     keyInput["userId"] = "maintenance@" + algorithmType_;
-    measure(setupTimings_.generateKeys, [&] {
+    measureTiming(setupTimings_.generateKeys, [&] {
         engine_->generateKeys(jsonInput(keyInput), baseContext_);
     });
 
@@ -216,10 +189,7 @@ void DynamicMaintenanceScenario::setup(const BenchmarkConfig& config)
     baseContext_.stateStore = stateStore_;
 }
 
-void DynamicMaintenanceScenario::prepare(const BenchmarkConfig&)
-{}
-
-bool DynamicMaintenanceScenario::runIteration()
+void DynamicMaintenanceScenario::runIteration()
 {
     lastTimings_ = StageTimings{};
     Json::Value request;
@@ -261,7 +231,7 @@ bool DynamicMaintenanceScenario::runIteration()
     // this worker's strategy, StateStore and setup results, and the engine
     // overwrites currentOp/maintainResult on every call.
     try {
-        measure(lastTimings_.maintain, [&] {
+        measureTiming(lastTimings_.maintain, [&] {
             engine_->maintain(jsonInput(request), baseContext_);
         });
         lastSucceeded_ = true;
@@ -273,7 +243,6 @@ bool DynamicMaintenanceScenario::runIteration()
         lastSucceeded_ = false;
     }
     ++localIteration_;
-    return lastSucceeded_;
 }
 
 void DynamicMaintenanceScenario::recordIteration(MetricsCollector& collector)
@@ -308,19 +277,9 @@ StageTimings DynamicMaintenanceScenario::getSetupTimings() const
     return setupTimings_;
 }
 
-MessageSizes DynamicMaintenanceScenario::getSetupMessageSizes() const
-{
-    return {};
-}
-
 StageTimings DynamicMaintenanceScenario::getLastTimings() const
 {
     return lastTimings_;
-}
-
-MessageSizes DynamicMaintenanceScenario::getLastMessageSizes() const
-{
-    return {};
 }
 
 void DynamicMaintenanceScenario::teardown()

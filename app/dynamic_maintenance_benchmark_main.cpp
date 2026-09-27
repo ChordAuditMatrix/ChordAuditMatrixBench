@@ -195,13 +195,17 @@ int main(int argc, char* argv[])
             throw std::runtime_error("Maintenance runner returned an unexpected result type");
         }
 
-        std::cout << dynamicMaintenanceConsoleReport(*result);
+        // Report through the framework's Report interface, like the PDP and
+        // identity executables do.
+        std::unique_ptr<Report> report =
+            std::make_unique<DynamicMaintenanceReport>(*result);
+        std::cout << report->toConsole();
         if (!jsonPath.empty()) {
             std::ofstream output(jsonPath);
             if (!output) {
                 throw std::runtime_error("Cannot open JSON output: " + jsonPath);
             }
-            output << dynamicMaintenanceJsonReport(*result);
+            output << report->toJson();
         }
         hotLoader->stopWatching();
         if (result->failedOperations > 0) {

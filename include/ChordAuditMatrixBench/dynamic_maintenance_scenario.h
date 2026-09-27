@@ -34,8 +34,9 @@
  *          - Insert: blockIndex = current block count + 1 (append);
  *          - Delete: blockIndex = current block count (drop the tail).
  *          A rejected operation is counted as a failure, not thrown, so the
- *          run reports success/failure totals; setup() rejects a Delete config
- *          whose initialBlocks cannot cover the largest worker's delete range.
+ *          run reports success/failure totals; validateRun() rejects a Delete
+ *          config whose initialBlocks cannot cover the largest slot of the
+ *          runner's BenchmarkRunPlan.
  *
  * @author Dylan Liu
  * @version 1.0.0
@@ -63,7 +64,9 @@ namespace CAMatrix::Audit::Benchmark {
  * @details Lifecycle per worker: setup() resolves the dynamic strategy, builds
  *          the worker's own engine, initializes the algorithm, generates keys
  *          and creates a StateStore pre-filled with initialBlocks blocks;
- *          prepare() is a no-op; every runIteration() performs one maintenance
+ *          validateRun() (inherited Runner contract) rejects a Delete config
+ *          whose capacity cannot cover the plan's largest slot; prepare() is
+ *          the inherited no-op; every runIteration() performs one maintenance
  *          call; computeResult() fills a DynamicMaintenanceResult from the
  *          merged collector; teardown() drops the worker-local state.
  *          The maintenance benchmark never runs inside PDP audit scenarios —
@@ -90,18 +93,23 @@ public:
     bool supportsParallelIterations() const override;
     /// @brief Returns the algorithm type identifier
     std::string algorithmType() const override;
+    /// @brief Rejects a Delete config whose capacity cannot cover the plan's largest slot
+    /// @param config Dynamic maintenance benchmark configuration
+    /// @param plan Scheduling plan the runner is about to execute
+    /// @throws std::invalid_argument On a non-maintenance config, or when
+    ///         Delete would exhaust a worker's store (initialBlocks smaller
+    ///         than the largest assigned slot)
+    void validateRun(const BenchmarkConfig& config,
+                     const BenchmarkRunPlan& plan) override;
     /// @brief One-time setup: engine, algorithm init, keys, worker-local StateStore
     /// @param config Dynamic maintenance benchmark configuration
     /// @throws std::invalid_argument On a non-maintenance config, a non-dynamic
-    ///         strategy, zero initial blocks, or a Delete config whose
-    ///         initialBlocks cannot cover the largest worker's delete range
+    ///         strategy or zero initial blocks
     void setup(const BenchmarkConfig& config) override;
-    /// @brief No-op: maintenance iterations need no pre-iteration preparation
-    /// @param config Dynamic maintenance benchmark configuration
-    void prepare(const BenchmarkConfig& config) override;
     /// @brief Execute one maintenance call on this worker's StateStore
-    /// @return true when the operation succeeded, false when it was rejected
-    bool runIteration() override;
+    /// @details The outcome (accepted / rejected) reaches the result through
+    ///          recordIteration(), which is the only result channel.
+    void runIteration() override;
     /// @brief Records the last maintenance outcome (success/failure) into the collector
     /// @param collector MetricsCollector to record into
     void recordIteration(MetricsCollector& collector) override;
@@ -113,12 +121,8 @@ public:
         const MetricsCollector& collector, const BenchmarkConfig& config) override;
     /// @brief Returns setup stage timings (algorithm init, key generation)
     StageTimings getSetupTimings() const override;
-    /// @brief Returns empty setup message sizes (maintenance measures no messages)
-    MessageSizes getSetupMessageSizes() const override;
     /// @brief Returns the maintenance timing of the most recent iteration
     StageTimings getLastTimings() const override;
-    /// @brief Returns empty iteration message sizes (maintenance measures no messages)
-    MessageSizes getLastMessageSizes() const override;
     /// @brief Drops engine, context, StateStore and per-run counters
     void teardown() override;
 

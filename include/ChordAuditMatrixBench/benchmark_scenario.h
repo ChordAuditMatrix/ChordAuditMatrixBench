@@ -53,14 +53,16 @@ class MetricsCollector;  // forward declaration (defined in metrics_collector.h)
  *
  *          Lifecycle (all virtual — Runner calls with zero type switch):
  *          1. setup(config)       — one-time initialization (key generation, etc.)
- *          2. prepare(config)     — pre-iteration preparation (PDP: corruption; Identity/Maintenance: noop)
- *          3. runIteration()      — called N times per parameter combination
- *          4. recordIteration(collector) — record per-iteration metrics (scenario-specific)
- *          5. computeResult(...)  — aggregate into a polymorphic BenchmarkResult
- *          6. teardown()          — cleanup
+ *          2. validateRun(config, plan) — pre-flight check against the runner's schedule
+ *          3. prepare(config)     — pre-iteration preparation (PDP: corruption; default: noop)
+ *          4. runIteration()      — called N times per parameter combination
+ *          5. recordIteration(collector) — record per-iteration metrics (scenario-specific)
+ *          6. computeResult(...)  — aggregate into a polymorphic BenchmarkResult
+ *          7. teardown()          — cleanup
  *
  *          Iterations of one run are independent by default; the Runner splits
- *          them across parallel workers, each with its own scenario instance.
+ *          them across parallel workers, each with its own scenario instance,
+ *          and reports the resulting BenchmarkRunPlan through validateRun().
  *          Scenarios whose computation carries per-run state that cannot be
  *          partitioned override supportsParallelIterations() to force serial
  *          execution (Runner still creates one scenario per run).
@@ -100,26 +102,51 @@ public:
     virtual void setup(const BenchmarkConfig& config) = 0;
 
     /**
+     * @brief Validate the configuration against the runner's scheduling plan
+     * @details Called once by the Runner after it has planned the run (effective
+     *          worker count and the iteration range of every slot) and before
+     *          any worker runs setup(), so a rejected configuration fails
+     *          without partial work. The default accepts every combination;
+     *          scenarios whose preconditions depend on the partition override
+     *          this and read the plan instead of re-deriving hardware threads
+     *          and slot sizes (DynamicMaintenanceScenario checks Delete
+     *          capacity against the largest assigned slot).
+     * @param config Benchmark configuration parameters
+     * @param plan Scheduling plan the Runner is about to execute
+     * @throws std::invalid_argument When @p config cannot run under @p plan
+     */
+    virtual void validateRun(const BenchmarkConfig& /*config*/,
+                             const BenchmarkRunPlan& /*plan*/)
+    {}
+
+    /**
      * @brief Pre-iteration preparation
-     * @details PDP: calls prepareCorruption(cfg.corruptedBlocks).
-     *          Identity: no-op.
+     * @details PDP: calls prepareCorruption(cfg.corruptedBlocks). The default
+     *          is a no-op for scenarios that need no preparation (Identity,
+     *          dynamic maintenance).
      * @param config Benchmark configuration parameters
      */
-    virtual void prepare(const BenchmarkConfig& config) = 0;
+    virtual void prepare(const BenchmarkConfig& /*config*/) {}
 
     /**
      * @brief Run a single benchmark iteration
      * @details Executes the core benchmark logic for one iteration. After each
      *          call, getLastTimings() and getLastMessageSizes() reflect the
-     *          metrics from this iteration.
-     * @return true if the iteration completed successfully, false on error
+     *          metrics from this iteration and recordIteration() reports the
+     *          outcome; runIteration() itself returns nothing, because
+     *          "success" means a different thing to every scenario (detection,
+     *          completion, accepted operation) and the Runner must not branch
+     *          on it.
      */
-    virtual bool runIteration() = 0;
+    virtual void runIteration() = 0;
 
     /**
      * @brief Record per-iteration metrics into the collector
      * @details PDP: records detection outcome. Identity: records TP/FP/TN/FN
-     *          per-sample outcomes from the last iteration.
+     *          per-sample outcomes from the last iteration. Dynamic
+     *          maintenance: records whether the last operation succeeded.
+     *          This is the only channel through which iteration outcomes reach
+     *          the aggregated result.
      * @param collector MetricsCollector to record into
      */
     virtual void recordIteration(MetricsCollector& collector) = 0;
@@ -141,8 +168,10 @@ public:
     virtual StageTimings getSetupTimings() const = 0;
     /**
      * @brief Get the communication metrics from the most recent setup() call
+     * @details Defaults to empty: scenarios that measure no setup messages
+     *          (dynamic maintenance) do not override this.
      */
-    virtual MessageSizes getSetupMessageSizes() const = 0;
+    virtual MessageSizes getSetupMessageSizes() const { return {}; }
 
     /**
      * @brief Get the timings from the most recent runIteration() call
@@ -151,8 +180,10 @@ public:
 
     /**
      * @brief Get the message sizes from the most recent runIteration() call
+     * @details Defaults to empty: scenarios that exchange no per-iteration
+     *          messages (dynamic maintenance) do not override this.
      */
-    virtual MessageSizes getLastMessageSizes() const = 0;
+    virtual MessageSizes getLastMessageSizes() const { return {}; }
 
     /**
      * @brief Clean up resources after benchmarking

@@ -19,11 +19,12 @@
  * @file benchmark_types.h
  * @brief Core type definitions for the audit benchmark framework
  * @details Defines polymorphic configuration / result hierarchies (PDP,
- *          dynamic maintenance, Identity), supporting data structures (timings,
- *          message sizes, audit outcome), and sequence-generation utilities
- *          shared across strategies. Legacy fat structs and
- *          ResultKind/ScenarioKind/SweepMode enums have been removed in favour
- *          of an all-polymorphic pipeline.
+ *          dynamic maintenance, Identity), the BenchmarkRunPlan scheduling
+ *          contract shared by the runner and scenarios, supporting data
+ *          structures (timings, message sizes, audit outcome), and
+ *          sequence-generation utilities shared across strategies. Legacy fat
+ *          structs and ResultKind/ScenarioKind/SweepMode enums have been
+ *          removed in favour of an all-polymorphic pipeline.
  * @author Dylan Liu
  * @version 4.2.0
  * @date 2026-09-05
@@ -32,10 +33,12 @@
 #ifndef CAMATRIX_AUDIT_BENCHMARK_TYPES_H
 #define CAMATRIX_AUDIT_BENCHMARK_TYPES_H
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace CAMatrix::Audit::Benchmark {
@@ -147,6 +150,111 @@ public:
     std::size_t numUsers = 10; /**< User count — setup() derives keys */
     std::size_t samplesPerIteration = 100; /**< Samples per iteration — generateTestSamples() */
     NegativeSampleConfig negativeSamples; /**< Negative sample config */
+};
+
+// ==================================================================
+// Scheduling plan (runner ↔ scenario contract)
+// ==================================================================
+
+/**
+ * @class BenchmarkRunPlan
+ * @brief Runner-owned scheduling plan for one benchmark run
+ * @details The runner resolves the requested worker count (0 requests
+ *          hardware_concurrency, fallback 1), clamps it so a run never creates
+ *          more workers than iterations (a zero-iteration run still runs one
+ *          worker), and splits the iterations into balanced contiguous slots:
+ *          slot i covers [slotBegin(i), slotBegin(i) + slotCount(i)).
+ *
+ *          This plan is the single source of the split formula. The runner
+ *          schedules its workers from it and hands the same instance to
+ *          BenchmarkScenario::validateRun() before any worker setup, so a
+ *          scenario precondition that depends on the partition (e.g. the
+ *          maintenance Delete capacity guard) reads the plan instead of
+ *          re-deriving hardware threads and slot sizes.
+ */
+class BenchmarkRunPlan {
+public:
+    /**
+     * @brief Resolve a raw worker-count request
+     * @param requested Raw --threads value (0 = hardware concurrency)
+     * @return Requested worker count; std::thread::hardware_concurrency() for 0,
+     *         with a fallback of 1 when the hardware count is unavailable
+     */
+    static std::size_t resolveThreadRequest(std::size_t requested)
+    {
+        if (requested == 0) {
+            const unsigned hardware = std::thread::hardware_concurrency();
+            return (hardware > 0) ? static_cast<std::size_t>(hardware) : 1;
+        }
+        return requested;
+    }
+
+    /**
+     * @brief Plan a balanced split of @p iterations over @p requestedThreads
+     * @param iterations Total iterations of the run
+     * @param requestedThreads Raw --threads value (0 = hardware concurrency)
+     * @return Plan holding the resolved request, the effective worker count
+     *         (never more than the iteration count, never less than 1) and the
+     *         resulting per-slot iteration ranges
+     */
+    static BenchmarkRunPlan balanced(std::size_t iterations, std::size_t requestedThreads)
+    {
+        BenchmarkRunPlan plan;
+        plan.iterations_ = iterations;
+        plan.requestedThreads_ = resolveThreadRequest(requestedThreads);
+        plan.effectiveThreads_ = std::min(
+            plan.requestedThreads_, std::max<std::size_t>(iterations, 1));
+        plan.baseIterations_ = iterations / plan.effectiveThreads_;
+        plan.remainderIterations_ = iterations % plan.effectiveThreads_;
+        return plan;
+    }
+
+    /// @brief Resolved thread request (never 0)
+    std::size_t requestedThreads() const { return requestedThreads_; }
+
+    /// @brief Worker slots this plan schedules (at least 1, at most iterations)
+    std::size_t effectiveThreads() const { return effectiveThreads_; }
+
+    /// @brief First iteration index of @p slot (0-based, contiguous across slots)
+    std::size_t slotBegin(std::size_t slot) const
+    {
+        return slot * baseIterations_ + std::min(slot, remainderIterations_);
+    }
+
+    /// @brief Iterations assigned to @p slot (base size, plus 1 for the first slots)
+    std::size_t slotCount(std::size_t slot) const
+    {
+        return baseIterations_ + (slot < remainderIterations_ ? 1 : 0);
+    }
+
+    /// @brief Largest per-slot iteration count — the most one worker can be asked to run
+    std::size_t largestSlotCount() const
+    {
+        return baseIterations_ + (remainderIterations_ > 0 ? 1 : 0);
+    }
+
+    /**
+     * @brief Downgrade to a single worker covering the whole iteration range
+     * @return Plan with the same resolved request but one slot
+     * @details Used when a scenario reports it cannot partition its iterations
+     *          (BenchmarkScenario::supportsParallelIterations() == false).
+     */
+    BenchmarkRunPlan asSingleWorker() const
+    {
+        BenchmarkRunPlan plan;
+        plan.iterations_ = iterations_;
+        plan.requestedThreads_ = requestedThreads_;
+        plan.effectiveThreads_ = 1;
+        plan.baseIterations_ = iterations_;
+        return plan;
+    }
+
+private:
+    std::size_t iterations_ = 0; /**< Total iterations of the planned run */
+    std::size_t requestedThreads_ = 1; /**< Resolved thread request (never 0) */
+    std::size_t effectiveThreads_ = 1; /**< Worker slots to schedule (≥ 1) */
+    std::size_t baseIterations_ = 0; /**< Iterations per slot (base; remainder slots get +1) */
+    std::size_t remainderIterations_ = 0; /**< Number of slots that get one extra iteration */
 };
 
 // ==================================================================

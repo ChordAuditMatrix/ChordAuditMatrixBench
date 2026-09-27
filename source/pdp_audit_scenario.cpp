@@ -44,6 +44,7 @@
 #include <ChordAuditMatrixBench/pdp_audit_scenario.h>
 
 // ── Framework ──
+#include <ChordAuditMatrixBench/benchmark_timing.h>
 #include <ChordAuditMatrixBench/benchmark_types.h>
 
 // ── Engine interface ──
@@ -67,7 +68,6 @@
 #include <json/json.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -122,32 +122,6 @@ AuditMsg::RawInput jsonInput(const ::Json::Value& v)
 {
     return AuditMsg::RawInput(
         std::make_shared<std::string>(::Json::FastWriter().write(v)));
-}
-
-void addTiming(TimingMetric& metric, double totalMs, std::size_t callCount = 1)
-{
-    metric.totalMs += totalMs;
-    metric.callCount += callCount;
-    metric.averageMs = (metric.callCount > 0)
-        ? metric.totalMs / static_cast<double>(metric.callCount) : 0.0;
-}
-
-/// Measure a stage and count the attempted public operation.
-template <typename Func>
-void measureTiming(TimingMetric& metric, Func&& fn)
-{
-    auto start = std::chrono::steady_clock::now();
-    try {
-        std::forward<Func>(fn)();
-    } catch (...) {
-        auto end = std::chrono::steady_clock::now();
-        addTiming(metric,
-                  std::chrono::duration<double, std::milli>(end - start).count());
-        throw;
-    }
-    auto end = std::chrono::steady_clock::now();
-    addTiming(metric,
-              std::chrono::duration<double, std::milli>(end - start).count());
 }
 
 } // anonymous namespace
@@ -351,7 +325,7 @@ void PdpAuditScenario::prepare(const BenchmarkConfig& config)
 // PdpAuditScenario — runIteration
 // ==================================================================
 
-bool PdpAuditScenario::runIteration()
+void PdpAuditScenario::runIteration()
 {
     lastTimings_ = StageTimings{};
     lastMessageSizes_ = MessageSizes{};
@@ -419,8 +393,6 @@ bool PdpAuditScenario::runIteration()
             static_cast<double>(serialized.size());
         lastMessageSizes_.proof.messageCount = 1;
     }
-
-    return lastDetected_;
 }
 
 // ==================================================================

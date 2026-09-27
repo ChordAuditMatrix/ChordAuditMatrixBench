@@ -9,6 +9,17 @@
 namespace CAMatrix::Audit::Benchmark {
 namespace {
 
+/// Stable display name of a maintenance operation.
+std::string maintenanceOperationName(MaintenanceOperation operation)
+{
+    switch (operation) {
+        case MaintenanceOperation::Update: return "Update";
+        case MaintenanceOperation::Insert: return "Insert";
+        case MaintenanceOperation::Delete: return "Delete";
+    }
+    throw std::invalid_argument("Unknown maintenance operation");
+}
+
 Json::Value timingJson(const TimingMetric& metric)
 {
     Json::Value value(Json::objectValue);
@@ -44,38 +55,27 @@ Json::Value reportJson(const DynamicMaintenanceResult& result)
 
 } // namespace
 
-std::string maintenanceOperationName(MaintenanceOperation operation)
+std::string DynamicMaintenanceReport::toConsole() const
 {
-    switch (operation) {
-        case MaintenanceOperation::Update: return "Update";
-        case MaintenanceOperation::Insert: return "Insert";
-        case MaintenanceOperation::Delete: return "Delete";
-    }
-    throw std::invalid_argument("Unknown maintenance operation");
-}
-
-std::string dynamicMaintenanceConsoleReport(
-    const DynamicMaintenanceResult& result)
-{
-    const auto& maintenance = result.iterationTimings.maintain;
-    const auto& initAlgorithm = result.setupTimings.initAlgorithm;
-    const auto& generateKeys = result.setupTimings.generateKeys;
+    const auto& maintenance = result_.iterationTimings.maintain;
+    const auto& initAlgorithm = result_.setupTimings.initAlgorithm;
+    const auto& generateKeys = result_.setupTimings.generateKeys;
 
     std::ostringstream out;
-    out << "Dynamic Maintenance Benchmark: " << result.algorithmType << '\n';
+    out << "Dynamic Maintenance Benchmark: " << result_.algorithmType << '\n';
     // One label column for every line, then the value; numeric values keep the
     // stream's fixed precision (4 decimals for times, 2 for the rate).
     out << std::left << std::fixed << std::setprecision(4);
-    out << std::setw(28) << "  Operation:" << maintenanceOperationName(result.operation) << '\n';
-    out << std::setw(28) << "  Initial blocks per worker:" << result.initialBlocks << '\n';
-    out << std::setw(28) << "  Iterations:" << result.iterations << '\n';
+    out << std::setw(28) << "  Operation:" << maintenanceOperationName(result_.operation) << '\n';
+    out << std::setw(28) << "  Initial blocks per worker:" << result_.initialBlocks << '\n';
+    out << std::setw(28) << "  Iterations:" << result_.iterations << '\n';
     out << std::setw(28) << "  Threads:"
-        << std::to_string(result.effectiveThreads) + " effective, "
-               + std::to_string(result.requestedThreads) + " requested" << '\n';
-    out << std::setw(28) << "  Successful operations:" << result.successfulOperations << '\n';
-    out << std::setw(28) << "  Failed operations:" << result.failedOperations << '\n';
+        << std::to_string(result_.effectiveThreads) + " effective, "
+               + std::to_string(result_.requestedThreads) + " requested" << '\n';
+    out << std::setw(28) << "  Successful operations:" << result_.successfulOperations << '\n';
+    out << std::setw(28) << "  Failed operations:" << result_.failedOperations << '\n';
     out << std::setw(28) << "  Final blocks (all workers):"
-        << result.finalBlocksAcrossWorkerStores << '\n';
+        << result_.finalBlocksAcrossWorkerStores << '\n';
     out << std::setw(28) << "  Total maintenance time:"
         << maintenance.totalMs << " ms (" << maintenance.callCount
         << " calls, aggregated across workers)\n";
@@ -85,19 +85,18 @@ std::string dynamicMaintenanceConsoleReport(
         << initAlgorithm.totalMs << " ms (" << initAlgorithm.callCount << " calls)\n";
     out << std::setw(28) << "  Setup generateKeys:"
         << generateKeys.totalMs << " ms (" << generateKeys.callCount << " calls)\n";
-    out << std::setw(28) << "  Wall time (end-to-end):" << result.wallTimeMs << " ms\n";
+    out << std::setw(28) << "  Wall time (end-to-end):" << result_.wallTimeMs << " ms\n";
     out << std::setw(28) << "  End-to-end throughput:"
-        << std::setprecision(2) << result.endToEndOperationsPerSecond()
+        << std::setprecision(2) << result_.endToEndOperationsPerSecond()
         << " ops/s (successful ops / whole-run wall time, includes setup)\n";
     return out.str();
 }
 
-std::string dynamicMaintenanceJsonReport(
-    const DynamicMaintenanceResult& result)
+std::string DynamicMaintenanceReport::toJson() const
 {
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "  ";
-    return Json::writeString(builder, reportJson(result)) + "\n";
+    return Json::writeString(builder, reportJson(result_)) + "\n";
 }
 
 } // namespace CAMatrix::Audit::Benchmark

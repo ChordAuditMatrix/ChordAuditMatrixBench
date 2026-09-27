@@ -22,17 +22,19 @@
  *          polymorphic virtual-method dispatch on BenchmarkScenario instances
  *          produced by an owned BenchmarkScenarioFactory — one scenario per
  *          parallel worker, per run:
- *          1. setup(config)    — one-time initialization
- *          2. prepare(config)  — pre-iteration preparation (PDP: corruption)
- *          3. runIteration()   — statically balanced iteration range, each
+ *          1. validateRun(config, plan) — pre-flight check against the run plan
+ *          2. setup(config)    — one-time initialization
+ *          3. prepare(config)  — pre-iteration preparation (PDP: corruption)
+ *          4. runIteration()   — statically balanced iteration range, each
  *                                iteration followed by recordIteration()
- *          4. teardown()       — cleanup
- *          5. computeResult()  — polymorphic BenchmarkResult
+ *          5. teardown()       — cleanup
+ *          6. computeResult()  — polymorphic BenchmarkResult
  *          Iterations of one run are partitioned across the effective worker
- *          count (config.threads; 0 = hardware_concurrency, effective count
- *          never exceeds iterations). Worker-local MetricsCollectors are
- *          merged on the main thread after all workers have joined; worker
- *          exceptions abort the config without a partial result. A scenario
+ *          count of a single BenchmarkRunPlan (config.threads; 0 =
+ *          hardware_concurrency, effective count never exceeds iterations).
+ *          Worker-local MetricsCollectors are merged on the main thread after
+ *          all workers have joined; worker exceptions and validateRun
+ *          rejections abort the config without a partial result. A scenario
  *          that cannot partition (supportsParallelIterations() == false, e.g.
  *          the maintenance scenario when no dynamic strategy is resolvable)
  *          forces serial execution. Zero type switch — legacy runSweep() and
@@ -119,18 +121,21 @@ public:
 
     /**
      * @brief Run benchmark for a single parameter combination
-     * @details Splits the iteration range across effective worker threads
-     *          (requested threads clamped to the iteration count; 0 requests
-     *          hardware_concurrency). Each worker owns an independently
-     *          created scenario and runs setup → prepare → its assigned
-     *          iterations → teardown, recording into a worker-local
-     *          MetricsCollector. Collectors are merged on the main thread in
-     *          deterministic slot order — raw totals/call counts/bytes are
-     *          summed and averages are recomputed during result filling.
-     *          Setup metrics are reported from worker 0 only: the
-     *          representative single-setup measurement of the run. If any
-     *          worker throws, all threads are joined and the config fails
-     *          without a partial result (first failure rethrown).
+     * @details Plans the run once (BenchmarkRunPlan: resolved thread request,
+     *          effective worker count clamped to the iteration count, balanced
+     *          contiguous slot ranges), hands that exact plan to the scenario's
+     *          validateRun() before any worker starts, then schedules one
+     *          worker per slot. Each worker owns an independently created
+     *          scenario and runs setup → prepare → its assigned iterations →
+     *          teardown, recording into a worker-local MetricsCollector.
+     *          Collectors are merged on the main thread in deterministic slot
+     *          order — raw totals/call counts/bytes are summed and averages are
+     *          recomputed during result filling. Setup metrics are reported
+     *          from worker 0 only: the representative single-setup measurement
+     *          of the run. If any worker throws, all threads are joined and the
+     *          config fails without a partial result (first failure rethrown);
+     *          a validateRun() rejection propagates the same way, before any
+     *          worker setup runs.
      * @param config Benchmark configuration
      * @return Polymorphic benchmark result (PdpAuditResult, IdentityResult or
      *         DynamicMaintenanceResult). wallTimeMs is the end-to-end
@@ -144,47 +149,42 @@ public:
         const auto wallStart = Clock::now();
 
         const std::size_t iterations = config.iterations;
-        const std::size_t requestedThreads = resolveThreadRequest(config.threads);
-        // Never split more workers than iterations; a degenerate zero-iteration
-        // config still runs one full lifecycle (as the serial runner did).
-        std::size_t effectiveThreads = std::min(requestedThreads,
-                                                std::max<std::size_t>(iterations, 1));
 
         // Worker 0's scenario is created up front: it doubles as the
         // parallel-capability probe and, in the serial path, as the only
         // scenario (identical lifecycle shape to the pre-parallel runner).
         auto worker0Scenario = factory_.createScenario();
-        if (effectiveThreads > 1 && !worker0Scenario->supportsParallelIterations()) {
+
+        // The plan owns thread resolution, the clamp to the iteration count and
+        // the balanced slot ranges; both the scheduling below and the
+        // scenario precondition check (validateRun) read this one instance.
+        BenchmarkRunPlan plan = BenchmarkRunPlan::balanced(iterations, config.threads);
+        if (plan.effectiveThreads() > 1 && !worker0Scenario->supportsParallelIterations()) {
             spdlog::info("  Scenario cannot partition iterations across threads "
                          "— running serially.");
-            effectiveThreads = 1;
+            plan = plan.asSingleWorker();
         }
+        // Pre-flight validation against the exact plan that is about to run.
+        // A throwing scenario (e.g. Delete capacity smaller than the largest
+        // assigned slot) aborts here, before any worker setup.
+        worker0Scenario->validateRun(config, plan);
         spdlog::info("  Benchmarking iterations={} (threads: requested={}, effective={}) ...",
-                     iterations, requestedThreads, effectiveThreads);
+                     iterations, plan.requestedThreads(), plan.effectiveThreads());
 
-        // Static balanced ranges: worker i runs base + (i < remainder ? 1 : 0)
-        // iterations over the contiguous interval [slotBegin(i), +slotCount(i)).
-        const std::size_t base = iterations / effectiveThreads;
-        const std::size_t remainder = iterations % effectiveThreads;
-        const auto slotBegin = [&](std::size_t slot) {
-            return slot * base + std::min(slot, remainder);
-        };
-        const auto slotCount = [&](std::size_t slot) {
-            return base + (slot < remainder ? 1 : 0);
-        };
+        const std::size_t effectiveThreads = plan.effectiveThreads();
 
         // Worker-local collectors and failures live in deterministic indexed
         // slots; only the main thread touches them after every worker joined.
         std::vector<MetricsCollector> workers(effectiveThreads);
         std::vector<std::exception_ptr> failures(effectiveThreads, nullptr);
 
-        // One full scenario lifecycle over [begin, begin + count) iterations.
+        // One full scenario lifecycle over the slot's iteration range.
         // Exceptions are captured per slot and the scenario is torn down
         // best-effort before the worker exits.
-        auto runWorkerLifecycle = [&](std::size_t slot, std::size_t begin,
-                                      std::size_t count,
-                                      MetricsCollector& out,
+        auto runWorkerLifecycle = [&](std::size_t slot, MetricsCollector& out,
                                       BenchmarkScenario& scenario) {
+            const std::size_t begin = plan.slotBegin(slot);
+            const std::size_t count = plan.slotCount(slot);
             try {
                 scenario.setup(config);
                 out.recordSetupTimings(scenario.getSetupTimings());
@@ -215,8 +215,7 @@ public:
                 failures[slot] = std::current_exception();
                 return;
             }
-            runWorkerLifecycle(slot, slotBegin(slot), slotCount(slot),
-                               workers[slot], *scenario);
+            runWorkerLifecycle(slot, workers[slot], *scenario);
         };
 
         std::vector<std::thread> pool;
@@ -233,7 +232,7 @@ public:
             }
             throw;
         }
-        runWorkerLifecycle(0, slotBegin(0), slotCount(0), workers[0], *worker0Scenario);
+        runWorkerLifecycle(0, workers[0], *worker0Scenario);
         for (auto& thread : pool) {
             thread.join();
         }
@@ -257,7 +256,7 @@ public:
 
         auto result = worker0Scenario->computeResult(merged, config);
         result->algorithmType = worker0Scenario->algorithmType();
-        result->requestedThreads = requestedThreads;
+        result->requestedThreads = plan.requestedThreads();
         result->effectiveThreads = effectiveThreads;
         result->wallTimeMs = std::chrono::duration<double, std::milli>(
             Clock::now() - wallStart).count();
@@ -265,24 +264,6 @@ public:
     }
 
 private:
-    /**
-     * @brief Resolve the requested worker count
-     * @details 0 requests std::thread::hardware_concurrency() with a fallback
-     *          of 1 when the hardware count is unavailable; any explicit
-     *          request is respected as-is (the caller clamps it to the
-     *          iteration count).
-     * @param requested Raw --threads value (default 1)
-     * @return Resolved thread request
-     */
-    static std::size_t resolveThreadRequest(std::size_t requested)
-    {
-        if (requested == 0) {
-            const unsigned hw = std::thread::hardware_concurrency();
-            requested = (hw > 0) ? static_cast<std::size_t>(hw) : 1;
-        }
-        return requested;
-    }
-
     BenchmarkScenarioFactory factory_;
 };
 

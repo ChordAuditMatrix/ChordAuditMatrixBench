@@ -171,8 +171,10 @@ public:
     /// @param config PDP benchmark configuration
     void prepare(const BenchmarkConfig& config) override;
     /// @brief Run one PDP iteration: genChallenges → genProofs → verifyProofs
-    /// @return true if the iteration completed successfully, false otherwise
-    bool runIteration() override;
+    /// @details Records nothing by itself: the detection outcome reaches the
+    ///          result through recordIteration() (and lastDetected() for direct
+    ///          inspection).
+    void runIteration() override;
     /// @brief PDP: records lastDetected_ into the collector
     /// @param collector MetricsCollector to record into
     void recordIteration(MetricsCollector& collector) override;

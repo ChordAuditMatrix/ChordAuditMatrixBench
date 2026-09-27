@@ -31,6 +31,8 @@
 
 #include <ChordAuditMatrixBench/identity_verify_scenario.h>
 
+#include <ChordAuditMatrixBench/benchmark_timing.h>
+
 // ── Framework ──
 #include <ChordAuditMatrixBench/benchmark_types.h>
 
@@ -44,11 +46,9 @@
 #include "ChordAuditMatrixLib/interfaces/audit/messages/audit_data_map.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <type_traits>
 #include <random>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
@@ -92,59 +92,12 @@ struct IdentityVerifyKeys {
     static constexpr std::string_view kSessionString      = "sessionString"; /**< Benchmark extension key for the session string */
 };
 
-/**
- * @brief Measure execution time of a callable in milliseconds
- * @tparam F Callable type
- * @param f Callable to measure
- * @return Execution time in milliseconds
- */
-template <typename F>
-double measureMs(F&& f)
-{
-    auto t0 = std::chrono::steady_clock::now();
-    std::forward<F>(f)();
-    auto t1 = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::milli>(t1 - t0).count();
-}
-
-void addTiming(TimingMetric& metric, double totalMs, std::size_t callCount = 1)
-{
-    metric.totalMs += totalMs;
-    metric.callCount += callCount;
-    metric.averageMs = (metric.callCount > 0)
-        ? metric.totalMs / static_cast<double>(metric.callCount) : 0.0;
-}
 void addMessage(MessageMetric& metric, std::size_t bytes)
 {
     metric.totalBytes += bytes;
     ++metric.messageCount;
     metric.averageBytes = static_cast<double>(metric.totalBytes)
         / static_cast<double>(metric.messageCount);
-}
-
-/**
- * @brief Measure one attempted operation and include failures in its count
- */
-template <typename F>
-auto measureCall(TimingMetric* metric, F&& f) -> std::invoke_result_t<F>
-{
-    if (!metric) {
-        return std::forward<F>(f)();
-    }
-
-    auto t0 = std::chrono::steady_clock::now();
-    try {
-        auto result = std::forward<F>(f)();
-        auto t1 = std::chrono::steady_clock::now();
-        addTiming(*metric,
-                  std::chrono::duration<double, std::milli>(t1 - t0).count());
-        return result;
-    } catch (...) {
-        auto t1 = std::chrono::steady_clock::now();
-        addTiming(*metric,
-                  std::chrono::duration<double, std::milli>(t1 - t0).count());
-        throw;
-    }
 }
 
 /**
@@ -170,7 +123,7 @@ CAMatrix::Crypto::CryptoArray signWithPrivateKey(
     }
 
     auto algo = ctx.manager->getIdentityAlgorithm(algorithmType);
-    auto signature = measureCall(timing, [&]() {
+    auto signature = measureTiming(timing, [&]() {
         auto variant = algo->createRequest(
             CAMatrix::Identity::Core::IdentityOperation::Sign, signInput);
         auto req = std::get<std::shared_ptr<
@@ -291,7 +244,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
 
     // ── Step 3: Generate the master key pair ──
     auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
-    auto masterKeys = measureCall(&ctx_.setupTimings.initAlgorithm, [&]() {
+    auto masterKeys = measureTiming(&ctx_.setupTimings.initAlgorithm, [&]() {
         return algo->generateMasterKey();
     });
     ctx_.masterPub = masterKeys.first;
@@ -300,7 +253,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     // ── Step 4: Derive per-user key pairs ──
     for (std::size_t i = 0; i < cfg.numUsers; ++i) {
         auto userId = "user-" + std::to_string(i);
-        auto userKeys = measureCall(&ctx_.setupTimings.generateKeys, [&]() {
+        auto userKeys = measureTiming(&ctx_.setupTimings.generateKeys, [&]() {
             return algo->deriveUserKey(
                 *ctx_.masterPub, *ctx_.masterPriv, userId);
         });
@@ -321,7 +274,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
     // reuse it so per-iteration work contains signing, not key generation.
     if (cfg.numUsers >= 2 && cfg.negativeSamples.forgeryRatio > 0.0) {
         try {
-            auto forgerKeys = measureCall(&ctx_.setupTimings.generateKeys, [&]() {
+            auto forgerKeys = measureTiming(&ctx_.setupTimings.generateKeys, [&]() {
                 return algo->deriveUserKey(
                     *ctx_.masterPub, *ctx_.masterPriv, "forger-external");
             });
@@ -339,7 +292,7 @@ void IdentityVerifyScenario::setup(const BenchmarkConfig& config)
 // runIteration()
 // ==================================================================
 
-bool IdentityVerifyScenario::runIteration()
+void IdentityVerifyScenario::runIteration()
 {
     using AuditDataMap = CAMatrix::Audit::Messages::AuditDataMap;
 
@@ -357,7 +310,7 @@ bool IdentityVerifyScenario::runIteration()
         CAMatrix::Crypto::CryptoArray aggSig;
         bool accepted = false;
         try {
-            aggSig = measureCall(&lastTimings_.aggregate, [&]() {
+            aggSig = measureTiming(&lastTimings_.aggregate, [&]() {
                 AuditDataMap aggInput;
                 aggInput.emplace(std::string(
                     IdentityAggregateKeys::kMessage), msgBytes);
@@ -406,7 +359,7 @@ bool IdentityVerifyScenario::runIteration()
             IdentityVerifyKeys::kSessionString),
             sample.sessionString);
 
-        accepted = measureCall(&lastTimings_.aggregateVerify, [&]() {
+        accepted = measureTiming(&lastTimings_.aggregateVerify, [&]() {
             auto algo = ctx_.manager->getIdentityAlgorithm(algorithmType_);
             auto variant = algo->createRequest(
                 CAMatrix::Identity::Core::IdentityOperation::Verify, verifyInput);
@@ -431,8 +384,6 @@ bool IdentityVerifyScenario::runIteration()
     lastAccuracyRate_ = (total > 0)
         ? static_cast<double>(lastTA_ + lastTR_) / static_cast<double>(total)
         : 0.0;
-
-    return true;
 }
 
 // ==================================================================
