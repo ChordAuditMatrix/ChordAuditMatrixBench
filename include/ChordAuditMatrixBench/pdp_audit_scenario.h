@@ -31,10 +31,13 @@
  *          - Iteration: genChallenges → genProofs → verifyProofs
  *
  *          For dynamic strategies (DHTDynamic), the pipeline is:
- *          - Setup: initAlgo → genKeys → genTags (context carries the StateStore)
- *          - Maintenance: perform Update/Insert/Delete ops via engine.maintain()
+ *          - Setup: initAlgo → genKeys → inject StateStore → genTags
  *          - Stale versions: mark blocks as stale in StateStore (version mismatch)
  *          - Iteration: genChallenges → genProofs → verifyProofs
+ *
+ *          Maintenance is not part of this scenario: Update/Insert/Delete
+ *          benchmarking lives in DynamicMaintenanceScenario, whose iterations
+ *          execute one engine.maintain() call each.
  *
  * @author Dylan Liu
  * @version 4.2.0
@@ -60,7 +63,6 @@ class AuditEngine;
 class AuditOperationContext;
 class AuditStrategy;
 class AuditStrategyManager;
-class DynamicAuditStrategy;
 class DynamicPdpStateStore;
 enum class StrategyKind : std::uint8_t;
 } // namespace CAMatrix::Audit::Core
@@ -244,7 +246,6 @@ public:
 private:
     std::string algorithmType_;
     std::shared_ptr<CAMatrix::Audit::Core::AuditStrategyManager> strategyManager_;
-    std::shared_ptr<CAMatrix::Audit::Core::DynamicAuditStrategy> dynamicStrategy_;
     PdpScenarioContext ctx_;
     PdpAuditConfig config_;
 

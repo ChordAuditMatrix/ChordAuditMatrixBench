@@ -29,9 +29,12 @@
  *          - Iteration: genChallenges → genProofs → verifyProofs
  *
  *          Dynamic PDP pipeline:
- *          - Setup: initAlgo → genKeys → genTags → inject StateStore → maintenance ops
+ *          - Setup: initAlgo → genKeys → inject StateStore → genTags
  *          - Stale versions: mark blocks as stale in StateStore (version mismatch)
  *          - Iteration: genChallenges → genProofs → verifyProofs
+ *          Maintenance (Update/Insert/Delete) is NOT part of the audit
+ *          pipeline — it is measured by the separate
+ *          DynamicMaintenanceScenario executable.
  *
  * @author Dylan Liu
  * @version 3.0.0
@@ -95,12 +98,6 @@ struct TagsKeys {
     static constexpr std::string_view kBlocks = "blocks"; /**< AuditDataMap key for the block window */
     static constexpr std::string_view kFileId = "fileId"; /**< AuditDataMap key for the file identity */
     static constexpr std::string_view kUserId = "userId"; /**< AuditDataMap key for the user identity */
-};
-
-struct MaintKeys {
-    static constexpr std::string_view kFileId       = "fileId"; /**< JSON key for the file identity */
-    static constexpr std::string_view kOpType       = "opType"; /**< JSON key for the maintenance operation type */
-    static constexpr std::string_view kBlockIndices = "blockIndices"; /**< JSON key for the affected block indices */
 };
 
 struct ChalKeys {
@@ -240,9 +237,7 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
     // Step 6 (dynamic PDP only): create this worker's StateStore. Binding it
     // to the shared strategy is coordinated with each dependent operation.
     if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic) {
-        dynamicStrategy_ =
-            std::dynamic_pointer_cast<AuditCore::DynamicAuditStrategy>(strategy);
-        if (!dynamicStrategy_) {
+        if (!std::dynamic_pointer_cast<AuditCore::DynamicAuditStrategy>(strategy)) {
             throw std::logic_error(
                 "PdpAuditScenario: strategy kind is Dynamic but dynamic_pointer_cast failed");
         }
@@ -251,8 +246,6 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
         ctx_.stateStore = ctx_.engine->createStateStore(strategy);
         ctx_.stateStore->addFile(ctx_.fileId, cfg.totalBlocks);
         ctx_.opCtx->stateStore = ctx_.stateStore;
-    } else {
-        dynamicStrategy_.reset();
     }
 
     // Step 7: Generate tags from original blocks
@@ -272,41 +265,6 @@ void PdpAuditScenario::setup(const BenchmarkConfig& config)
         metric.messageCount = 1;
     }
 
-    // Step 8 (dynamic PDP only): Perform maintenance operations
-    if (ctx_.strategyKind == AuditCore::StrategyKind::Dynamic && cfg.maintenanceOps > 0) {
-        std::mt19937 rng(config.usePseudoRandom ? config.seed + 2 : 123);
-        std::uniform_int_distribution<std::size_t> blockIdxDist(0, cfg.totalBlocks - 1);
-        std::uniform_int_distribution<int> opTypeDist(0, 2);
-
-        for (std::size_t op = 0; op < cfg.maintenanceOps; ++op) {
-            auto blockIdx = blockIdxDist(rng);
-            auto opType = static_cast<AuditMsg::MaintenanceOpType>(opTypeDist(rng));
-
-            // The StateStore maintenance APIs take 1-based block indices.
-            const auto blockIndex = static_cast<::Json::UInt64>(blockIdx + 1);
-
-            ::Json::Value maintainJson;
-            maintainJson[MaintKeys::kFileId] = ctx_.fileId;
-            maintainJson[MaintKeys::kOpType] = static_cast<int>(opType);
-            maintainJson[MaintKeys::kBlockIndices] = ::Json::Value(::Json::arrayValue);
-            maintainJson[MaintKeys::kBlockIndices].append(blockIndex);
-
-            AuditCore::AuditOperationContext maintainCtx;
-            maintainCtx.strategy = strategy;
-            maintainCtx.stateStore = ctx_.stateStore;
-            maintainCtx.initializeAlgorithmResult = ctx_.opCtx->initializeAlgorithmResult;
-            maintainCtx.generateKeysResult = ctx_.opCtx->generateKeysResult;
-
-            // Maintenance only updates StateStore metadata. In production the
-            // affected tags are regenerated afterwards by the Admin pass that
-            // reads firstAffectedBlockIndex (see MaintainAuditUseCase), so the
-            // benchmark does not fabricate throw-away tags here. Until that
-            // regeneration runs, audits may detect the shifted or stale tags.
-            measureTiming(ctx_.setupTimings.maintain, [&]() {
-                ctx_.engine->maintain(jsonInput(maintainJson), maintainCtx);
-            });
-        }
-    }
 }
 
 // ==================================================================
@@ -538,7 +496,6 @@ void PdpAuditScenario::teardown()
     ctx_.staleIndices.clear();
     ctx_.stateStore.reset();
     ctx_.strategy.reset();
-    dynamicStrategy_.reset();
     ctx_.userId.clear();
     ctx_.fileId.clear();
     ctx_.setupMessageSizes = MessageSizes{};

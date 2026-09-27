@@ -18,11 +18,12 @@
 /**
  * @file benchmark_types.h
  * @brief Core type definitions for the audit benchmark framework
- * @details Defines polymorphic configuration / result hierarchies (PDP + Identity),
- *          supporting data structures (timings, message sizes, audit outcome),
- *          and sequence-generation utilities shared across strategies.
- *          Legacy fat structs and ResultKind/ScenarioKind/SweepMode enums have
- *          been removed in favour of an all-polymorphic pipeline.
+ * @details Defines polymorphic configuration / result hierarchies (PDP,
+ *          dynamic maintenance, Identity), supporting data structures (timings,
+ *          message sizes, audit outcome), and sequence-generation utilities
+ *          shared across strategies. Legacy fat structs and
+ *          ResultKind/ScenarioKind/SweepMode enums have been removed in favour
+ *          of an all-polymorphic pipeline.
  * @author Dylan Liu
  * @version 4.2.0
  * @date 2026-09-05
@@ -111,7 +112,30 @@ public:
     std::size_t corruptedBlocks = 10; /**< t — prepareCorruption() */
     std::size_t sampleSize = 50; /**< r — runIteration() challenge count */
     std::size_t blockSize = 256; /**< Data block size in bytes — setup() */
-    std::size_t maintenanceOps = 0; /**< Dynamic PDP maintenance ops — setup() */
+};
+
+/**
+ * @enum MaintenanceOperation
+ * @brief Dynamic PDP maintenance operation exercised by the maintenance benchmark
+ */
+enum class MaintenanceOperation : std::uint8_t {
+    Update, /**< Re-bump an existing block's metadata (version/timestamp) */
+    Insert, /**< Append one new block at the end of the store */
+    Delete  /**< Remove one existing block from the end of the store */
+};
+
+/**
+ * @class DynamicMaintenanceConfig
+ * @brief Configuration for the dynamic maintenance benchmark
+ * @details Each runner worker builds its own engine, context and StateStore
+ *          pre-filled with initialBlocks blocks, then executes exactly one
+ *          maintenance operation per iteration against worker-local 1-based
+ *          block indices (see DynamicMaintenanceScenario).
+ */
+class DynamicMaintenanceConfig final : public BenchmarkConfig {
+public:
+    std::size_t initialBlocks = 1000; /**< Blocks pre-initialized in each worker-local StateStore */
+    MaintenanceOperation operation = MaintenanceOperation::Update; /**< Maintenance operation executed once per iteration */
 };
 
 /**
@@ -160,8 +184,8 @@ struct StageTimings {
     TimingMetric aggregateVerify; /**< Aggregate verification time */
     TimingMetric aggregate; /**< Aggregation stage timing */
 
-    // --- Dynamic PDP stages ---
-    TimingMetric maintain; /**< Dynamic PDP maintenance time */
+    // --- Dynamic maintenance ---
+    TimingMetric maintain; /**< One maintenance call per iteration (DynamicMaintenanceScenario) */
 };
 
 // ==================================================================
@@ -229,7 +253,7 @@ public:
     std::size_t iterations = 0; /**< Iterations performed */
     std::size_t requestedThreads = 1; /**< Resolved thread request (0 → std::thread::hardware_concurrency, fallback 1) */
     std::size_t effectiveThreads = 1; /**< Threads actually used — ≤ iterations; forced to 1 when the scenario cannot partition */
-    double wallTimeMs = 0.0; /**< End-to-end wall time of the benchmark run, in milliseconds */
+    double wallTimeMs = 0.0; /**< End-to-end wall time of the whole run: setup + prepare + iterations + teardown (BenchmarkRunner::runSingle) */
 
     StageTimings setupTimings; /**< Setup-phase timing metrics */
     StageTimings iterationTimings; /**< Aggregated per-iteration timing metrics */
@@ -241,6 +265,52 @@ public:
 };
 
 /**
+ * @class DynamicMaintenanceResult
+ * @brief Result produced by the dynamic maintenance benchmark
+ * @details Call totals come from the merged collector: successes + failures
+ *          equal the number of maintenance calls actually attempted, which is
+ *          the configured iteration count unless a worker aborted the run.
+ *          Per-call latency is read from iterationTimings.maintain, whose
+ *          totals aggregate every worker's calls (workers run concurrently, so
+ *          that sum is aggregated call time, not wall time).
+ */
+class DynamicMaintenanceResult final : public BenchmarkResult {
+public:
+    MaintenanceOperation operation = MaintenanceOperation::Update; /**< Operation executed per iteration */
+    std::size_t initialBlocks = 0; /**< Blocks pre-initialized per worker-local StateStore */
+    std::size_t successfulOperations = 0; /**< Maintenance calls that returned without throwing */
+    std::size_t failedOperations = 0; /**< Maintenance calls that threw and were counted as failures */
+
+    /**
+     * @brief Sum of every worker's StateStore block count after its last iteration
+     * @details State-transition check for the run: Update leaves each store at
+     *          initialBlocks, so the total stays initialBlocks * effectiveThreads;
+     *          Insert adds one block per successful insert and Delete removes
+     *          one per successful delete, so the total is
+     *          initialBlocks * effectiveThreads + successfulOperations (Insert)
+     *          or - successfulOperations (Delete). A rejected call changes
+     *          nothing, so the identity also holds when failedOperations > 0.
+     */
+    std::size_t finalBlocksAcrossWorkerStores = 0;
+
+    /**
+     * @brief Successful maintenance operations per second over the whole run
+     * @return successfulOperations * 1000 / wallTimeMs, 0.0 when wall time is 0
+     * @details wallTimeMs is the end-to-end BenchmarkRunner measurement: it
+     *          covers worker setup (engine/key/StateStore), the iteration loop
+     *          and teardown, so this is a whole-run rate, NOT maintenance-only
+     *          throughput. The maintenance-only per-call view is
+     *          iterationTimings.maintain (totalMs / callCount / averageMs).
+     */
+    double endToEndOperationsPerSecond() const
+    {
+        return wallTimeMs > 0.0
+            ? static_cast<double>(successfulOperations) * 1000.0 / wallTimeMs
+            : 0.0;
+    }
+};
+
+/**
  * @class PdpAuditResult
  * @brief Result produced by PDP strategies
  */
@@ -249,7 +319,6 @@ public:
     std::size_t totalBlocks = 0; /**< N */
     std::size_t corruptedBlocks = 0; /**< t */
     std::size_t sampleSize = 0; /**< r */
-    std::size_t maintenanceOps = 0; /**< Dynamic PDP maintenance ops */
 
     std::size_t detections = 0; /**< Iterations that detected corruption */
     double confidenceRate = 0; /**< Empirical = detections / iterations */

@@ -19,11 +19,11 @@
  * @file benchmark_scenario.h
  * @brief Top-level abstract interface for benchmark scenarios
  * @details Defines the polymorphic BenchmarkScenario abstract class, the
- *          common base for both PDP audit and identity verification benchmark
- *          scenarios. Each concrete scenario implements the full virtual
- *          lifecycle: setup → prepare → runIteration → recordIteration →
- *          computeResult → teardown. Runner calls these methods polymorphically
- *          with zero type switch.
+ *          common base for the PDP audit, identity verification and dynamic
+ *          maintenance benchmark scenarios. Each concrete scenario implements
+ *          the full virtual lifecycle: setup → prepare → runIteration →
+ *          recordIteration → computeResult → teardown. Runner calls these
+ *          methods polymorphically with zero type switch.
  * @author Dylan Liu
  * @version 4.2.0
  * @date 2026-09-05
@@ -48,14 +48,14 @@ class MetricsCollector;  // forward declaration (defined in metrics_collector.h)
  * @details A BenchmarkScenario encapsulates the algorithm-specific logic for
  *          setting up the benchmark environment, running iterations, recording
  *          outcomes, and computing the aggregated result. Concrete subclasses
- *          (PdpAuditScenario, IdentityVerifyScenario) provide the actual
- *          implementation for each scenario type.
+ *          (PdpAuditScenario, IdentityVerifyScenario, DynamicMaintenanceScenario)
+ *          provide the actual implementation for each scenario type.
  *
  *          Lifecycle (all virtual — Runner calls with zero type switch):
  *          1. setup(config)       — one-time initialization (key generation, etc.)
- *          2. prepare(config)     — pre-iteration preparation (PDP: corruption; Identity: noop)
+ *          2. prepare(config)     — pre-iteration preparation (PDP: corruption; Identity/Maintenance: noop)
  *          3. runIteration()      — called N times per parameter combination
- *          4. recordIteration(collector) — record per-iteration metrics (PDP/Identity-specific)
+ *          4. recordIteration(collector) — record per-iteration metrics (scenario-specific)
  *          5. computeResult(...)  — aggregate into a polymorphic BenchmarkResult
  *          6. teardown()          — cleanup
  *
@@ -74,10 +74,13 @@ public:
      * @return true if an independently constructed scenario can execute any
      *         contiguous sub-range of the iteration loop; false forces the
      *         Runner to execute the run serially with a single scenario
-     * @details Defaults to true (iterations are independent trials). PDP
-     *          scenarios override this based on the resolved strategy kind:
-     *          dynamic PDP injects a per-run StateStore onto the shared
-     *          algorithm instance, so it cannot be partitioned.
+     * @details Defaults to true (iterations are independent trials). Scenarios
+     *          override this when an iteration depends on run-level state: the
+     *          maintenance scenario reports false unless the manager resolves a
+     *          dynamic strategy, and PDP audit reports false when no strategy is
+     *          resolvable. Reporting false keeps the run serial, so a scenario
+     *          that then rejects the config (setup() throws) fails with a clear
+     *          error instead of spawning workers that all fail.
      */
     virtual bool supportsParallelIterations() const { return true; }
 

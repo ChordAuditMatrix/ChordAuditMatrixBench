@@ -42,13 +42,16 @@ namespace CAMatrix::Audit::Benchmark {
 /**
  * @class MetricsCollector
  * @brief Collects and aggregates metrics from multiple benchmark iterations
- * @details Supports both PDP audit scenarios (confidence rate via recordOutcome)
- *          and identity verification scenarios (accuracy rate via
- *          recordIdentityOutcome). The legacy computeResult() with ResultKind
- *          dispatch has been split into fillPdpResult() / fillIdentityResult()
- *          (called by the corresponding Scenario::computeResult()). In
- *          parallel runs each worker records into its own collector and the
- *          runner merges them via mergeFrom() before result filling.
+ * @details Supports PDP audit scenarios (confidence rate via recordOutcome),
+ *          dynamic maintenance scenarios (success/failure counts via
+ *          recordMaintenanceOutcome) and identity verification scenarios
+ *          (accuracy rate via recordIdentityOutcome). The legacy
+ *          computeResult() with ResultKind dispatch has been split into
+ *          fillPdpResult() / fillDynamicMaintenanceResult() /
+ *          fillIdentityResult() (called by the corresponding
+ *          Scenario::computeResult()). In parallel runs each worker records
+ *          into its own collector and the runner merges them via mergeFrom()
+ *          before result filling.
  */
 class MetricsCollector {
 public:
@@ -64,6 +67,22 @@ public:
         ++iterations_;
         if (detected) {
             ++detections_;
+        }
+    }
+
+    /**
+     * @brief Record the outcome of a single dynamic-maintenance operation
+     * @param succeeded Whether the maintenance call completed without throwing
+     * @details Success and failure counters are the two halves of the
+     *          maintenance call total (successes + failures == calls), so the
+     *          scenario reports call totals without a separate call counter.
+     */
+    void recordMaintenanceOutcome(bool succeeded)
+    {
+        if (succeeded) {
+            ++successfulMaintenanceOperations_;
+        } else {
+            ++failedMaintenanceOperations_;
         }
     }
 
@@ -86,6 +105,30 @@ public:
         } else {
             ++falseRejects_;
         }
+    }
+
+    /**
+     * @brief Record the recording worker's StateStore block count
+     * @param blocks Block count of the recording worker's own store
+     * @details Overwrite semantics, unlike the accumulating recorders: each
+     *          worker's collector holds that worker's latest (i.e. final)
+     *          count, and mergeFrom() sums the per-worker counts into the run
+     *          total. DynamicMaintenanceScenario calls this after every
+     *          iteration, so the value left at the end of a worker's loop is
+     *          its final store size.
+     */
+    void recordWorkerFinalBlockCount(std::size_t blocks)
+    {
+        finalBlockCount_ = blocks;
+    }
+
+    /**
+     * @brief Latest StateStore block count recorded for the recording worker
+     * @return Block count last passed to recordWorkerFinalBlockCount(), 0 when none
+     */
+    std::size_t workerFinalBlockCount() const
+    {
+        return finalBlockCount_;
     }
 
     // ── Setup metrics ──
@@ -172,10 +215,26 @@ public:
         result.totalBlocks = config.totalBlocks;
         result.corruptedBlocks = config.corruptedBlocks;
         result.sampleSize = config.sampleSize;
-        result.maintenanceOps = config.maintenanceOps;
         result.detections = detections_;
         result.confidenceRate = (iterations_ > 0)
             ? static_cast<double>(detections_) / static_cast<double>(iterations_) : 0.0;
+        fillCommonMetrics(result, config);
+    }
+
+    /**
+     * @brief Fill a DynamicMaintenanceResult with maintenance-specific and common metrics
+     * @param result [OUT] Maintenance result to populate
+     * @param config Dynamic maintenance configuration used for the run
+     */
+    void fillDynamicMaintenanceResult(
+        DynamicMaintenanceResult& result,
+        const DynamicMaintenanceConfig& config) const
+    {
+        result.operation = config.operation;
+        result.initialBlocks = config.initialBlocks;
+        result.successfulOperations = successfulMaintenanceOperations_;
+        result.failedOperations = failedMaintenanceOperations_;
+        result.finalBlocksAcrossWorkerStores = finalBlockCount_;
         fillCommonMetrics(result, config);
     }
 
@@ -225,6 +284,9 @@ public:
         setupTimingsRecorded_ = false;
         setupMessageSizesRecorded_ = false;
         memoryPeakBytes_ = 0;
+        successfulMaintenanceOperations_ = 0;
+        failedMaintenanceOperations_ = 0;
+        finalBlockCount_ = 0;
     }
 
     // ── Merge (parallel-run worker collectors) ──
@@ -233,7 +295,9 @@ public:
      * @brief Merge raw metrics from a worker-local collector into this one
      * @details Sums raw totals, call counts, byte counts, and outcome counters
      *          across both collectors — per-iteration and setup-stage timings,
-     *          message sizes, PDP detections, and identity TP/FP/TN/FN samples.
+     *          message sizes, PDP detections, dynamic-maintenance
+     *          success/failure counts and per-worker final block counts, and
+     *          identity TP/FP/TN/FN samples.
      *          Averages are recomputed from the merged totals here (per add),
      *          so each average is derived from the full run rather than from
      *          averaging per-worker averages; derived per-iteration rates are
@@ -293,6 +357,11 @@ public:
         trueAccepts_ += other.trueAccepts_;
         falseAccepts_ += other.falseAccepts_;
         trueRejects_ += other.trueRejects_;
+        successfulMaintenanceOperations_ += other.successfulMaintenanceOperations_;
+        failedMaintenanceOperations_ += other.failedMaintenanceOperations_;
+        // Per-worker final store sizes sum into the run total (each side holds
+        // its own workers' latest counts, not an accumulated sequence).
+        finalBlockCount_ += other.finalBlockCount_;
         falseRejects_ += other.falseRejects_;
         memoryPeakBytes_ = std::max(memoryPeakBytes_, other.memoryPeakBytes_);
         setupTimingsRecorded_ = setupTimingsRecorded_ || other.setupTimingsRecorded_;
@@ -304,6 +373,11 @@ private:
     // ── PDP audit counters ──
     std::size_t iterations_ = 0;
     std::size_t detections_ = 0;
+
+    // ── Dynamic maintenance counters (one maintenance call per iteration) ──
+    std::size_t successfulMaintenanceOperations_ = 0;
+    std::size_t failedMaintenanceOperations_ = 0;
+    std::size_t finalBlockCount_ = 0; /**< Recording worker's latest StateStore block count (summed by mergeFrom) */
 
     // ── Identity verification counters ──
     std::size_t totalVerifySamples_ = 0;

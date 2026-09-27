@@ -219,7 +219,6 @@ PdpDirectStrategy::parseAndExpand(int argc, char** argv)
     std::size_t iterations = 10;
     std::size_t threads = 1;
     std::size_t blockSize = 256;
-    std::size_t maintenanceOps = 0;
     bool usePseudoRandom = false;
     std::uint64_t seed = 0;
 
@@ -241,8 +240,6 @@ PdpDirectStrategy::parseAndExpand(int argc, char** argv)
             }
         } else if (arg == "--block-size" && i + 1 < argc) {
             blockSize = static_cast<std::size_t>(std::atol(argv[++i]));
-        } else if (arg == "--maintenance-ops" && i + 1 < argc) {
-            maintenanceOps = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--use-pseudo-random") {
             usePseudoRandom = true;
         } else if (arg == "--seed" && i + 1 < argc) {
@@ -302,7 +299,6 @@ PdpDirectStrategy::parseAndExpand(int argc, char** argv)
             cfg->corruptedBlocks = t;
             cfg->sampleSize = r;
             cfg->blockSize = blockSize;
-            cfg->maintenanceOps = maintenanceOps;
             cfg->iterations = iterations;
             cfg->threads = threads;
             cfg->usePseudoRandom = usePseudoRandom;
@@ -336,7 +332,6 @@ PdpFixedRatioStrategy::parseAndExpand(int argc, char** argv)
     std::size_t iterations = 10;
     std::size_t threads = 1;
     std::size_t blockSize = 256;
-    std::size_t maintenanceOps = 0;
     bool usePseudoRandom = false;
     std::uint64_t seed = 0;
     double corruptedRatio = 0.01;
@@ -357,8 +352,6 @@ PdpFixedRatioStrategy::parseAndExpand(int argc, char** argv)
             }
         } else if (arg == "--block-size" && i + 1 < argc) {
             blockSize = static_cast<std::size_t>(std::atol(argv[++i]));
-        } else if (arg == "--maintenance-ops" && i + 1 < argc) {
-            maintenanceOps = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--use-pseudo-random") {
             usePseudoRandom = true;
         } else if (arg == "--seed" && i + 1 < argc) {
@@ -395,7 +388,6 @@ PdpFixedRatioStrategy::parseAndExpand(int argc, char** argv)
         cfg->sampleSize = std::min(cfg->sampleSize, cfg->totalBlocks);
         cfg->corruptedBlocks = std::min(cfg->corruptedBlocks, cfg->totalBlocks);
         cfg->blockSize = blockSize;
-        cfg->maintenanceOps = maintenanceOps;
         cfg->iterations = iterations;
         cfg->threads = threads;
         cfg->usePseudoRandom = usePseudoRandom;
@@ -428,7 +420,6 @@ PdpInverseConfidenceStrategy::parseAndExpand(int argc, char** argv)
     std::size_t iterations = 10;
     std::size_t threads = 1;
     std::size_t blockSize = 256;
-    std::size_t maintenanceOps = 0;
     bool usePseudoRandom = false;
     std::uint64_t seed = 0;
     double targetConfidence = 0.96;
@@ -448,8 +439,6 @@ PdpInverseConfidenceStrategy::parseAndExpand(int argc, char** argv)
             }
         } else if (arg == "--block-size" && i + 1 < argc) {
             blockSize = static_cast<std::size_t>(std::atol(argv[++i]));
-        } else if (arg == "--maintenance-ops" && i + 1 < argc) {
-            maintenanceOps = static_cast<std::size_t>(std::atol(argv[++i]));
         } else if (arg == "--use-pseudo-random") {
             usePseudoRandom = true;
         } else if (arg == "--seed" && i + 1 < argc) {
@@ -487,7 +476,6 @@ PdpInverseConfidenceStrategy::parseAndExpand(int argc, char** argv)
         cfg->corruptedBlocks = t;
         cfg->sampleSize = r;
         cfg->blockSize = blockSize;
-        cfg->maintenanceOps = maintenanceOps;
         cfg->iterations = iterations;
         cfg->threads = threads;
         cfg->usePseudoRandom = usePseudoRandom;

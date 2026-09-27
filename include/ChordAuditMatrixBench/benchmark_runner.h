@@ -34,7 +34,7 @@
  *          merged on the main thread after all workers have joined; worker
  *          exceptions abort the config without a partial result. A scenario
  *          that cannot partition (supportsParallelIterations() == false, e.g.
- *          dynamic PDP with per-run state injected on the shared algorithm)
+ *          the maintenance scenario when no dynamic strategy is resolvable)
  *          forces serial execution. Zero type switch — legacy runSweep() and
  *          scenarioKindToResultKind() have been removed (sweep orchestration
  *          now lives in CLI main).
@@ -132,7 +132,11 @@ public:
      *          worker throws, all threads are joined and the config fails
      *          without a partial result (first failure rethrown).
      * @param config Benchmark configuration
-     * @return Polymorphic benchmark result (PdpAuditResult or IdentityResult)
+     * @return Polymorphic benchmark result (PdpAuditResult, IdentityResult or
+     *         DynamicMaintenanceResult). wallTimeMs is the end-to-end
+     *         measurement of the whole lifecycle (setup + prepare + iterations
+     *         + teardown), so it is the denominator of any whole-run rate, not
+     *         of a single stage.
      */
     std::unique_ptr<BenchmarkResult> runSingle(const BenchmarkConfig& config)
     {
@@ -152,7 +156,7 @@ public:
         auto worker0Scenario = factory_.createScenario();
         if (effectiveThreads > 1 && !worker0Scenario->supportsParallelIterations()) {
             spdlog::info("  Scenario cannot partition iterations across threads "
-                         "(shared per-run algorithm state) — running serially.");
+                         "— running serially.");
             effectiveThreads = 1;
         }
         spdlog::info("  Benchmarking iterations={} (threads: requested={}, effective={}) ...",

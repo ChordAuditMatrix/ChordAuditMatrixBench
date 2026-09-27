@@ -121,9 +121,6 @@ std::string pdpPerformanceSummary(const PdpAuditResult& r)
     if (r.setupMessageSizes.tags.messageCount > 0) {
         oss << "      Tag set:          " << messageSummary(r.setupMessageSizes.tags) << "\n";
     }
-    if (r.setupTimings.maintain.callCount > 0) {
-        oss << "      Maintenance:      " << timingSummary(r.setupTimings.maintain) << "\n";
-    }
     oss << "    Iteration totals:\n";
     oss << "      Challenge gen:    " << timingSummary(r.iterationTimings.generateChallenges) << "\n";
     oss << "      Proof gen:        " << timingSummary(r.iterationTimings.generateProofs) << "\n";
@@ -144,8 +141,7 @@ std::string pdpCommonJson(const PdpAuditResult& r, const std::string& indent)
     oss << indent << "  \"setupTimings\": {\n";
     oss << indent << "    \"initAlgorithm\": " << timingMetricJson(r.setupTimings.initAlgorithm) << ",\n";
     oss << indent << "    \"generateKeys\": " << timingMetricJson(r.setupTimings.generateKeys) << ",\n";
-    oss << indent << "    \"generateTags\": " << timingMetricJson(r.setupTimings.generateTags) << ",\n";
-    oss << indent << "    \"maintain\": " << timingMetricJson(r.setupTimings.maintain) << "\n";
+    oss << indent << "    \"generateTags\": " << timingMetricJson(r.setupTimings.generateTags) << "\n";
     oss << indent << "  },\n";
     oss << indent << "  \"iterationTimings\": {\n";
     oss << indent << "    \"generateChallenges\": " << timingMetricJson(r.iterationTimings.generateChallenges) << ",\n";
