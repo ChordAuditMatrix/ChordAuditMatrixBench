@@ -2,7 +2,7 @@ name: CI
 
 # CI / Release pipeline for ChordAuditMatrixBench.
 #
-# Builds two benchmark executables on Linux, macOS, and Windows.
+# Builds three benchmark executables on Linux, macOS, and Windows.
 # On tag pushes matching v*, the per-platform archives are packaged
 # and uploaded to a GitHub Release with a Conventional Commits changelog.
 #
@@ -130,7 +130,8 @@ jobs:
         run: |
           cmake --build build --parallel \
             --target PdpChordAuditMatrixBench \
-            --target IdentityChordAuditMatrixBench
+            --target IdentityChordAuditMatrixBench \
+            --target DynamicMaintenanceChordAuditMatrixBench
 
       # ── Package (tag pushes only) ──
 
@@ -143,6 +144,7 @@ jobs:
           mkdir -p "${STAGING}/bin"
           find build -type f -name 'PdpChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
           find build -type f -name 'IdentityChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
+          find build -type f -name 'DynamicMaintenanceChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
           cp README.md LICENSE "${STAGING}/" 2>/dev/null || true
           zip -r "${STAGING}.zip" "${STAGING}"
           echo "PACKAGE_PATH=${STAGING}.zip" >> "$GITHUB_ENV"
@@ -156,6 +158,7 @@ jobs:
           mkdir -p "${STAGING}/bin"
           find build -type f -name 'PdpChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
           find build -type f -name 'IdentityChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
+          find build -type f -name 'DynamicMaintenanceChordAuditMatrixBench' -perm -u+x -print -quit | head -n1 | xargs -I{} cp {} "${STAGING}/bin/"
           cp README.md LICENSE "${STAGING}/" 2>/dev/null || true
           zip -r "${STAGING}.zip" "${STAGING}"
           echo "PACKAGE_PATH=${STAGING}.zip" >> "$GITHUB_ENV"
@@ -170,6 +173,8 @@ jobs:
           Get-ChildItem -Path build -Recurse -Filter 'PdpChordAuditMatrixBench.exe' |
             Copy-Item -Destination "$staging\bin\" -ErrorAction SilentlyContinue
           Get-ChildItem -Path build -Recurse -Filter 'IdentityChordAuditMatrixBench.exe' |
+            Copy-Item -Destination "$staging\bin\" -ErrorAction SilentlyContinue
+          Get-ChildItem -Path build -Recurse -Filter 'DynamicMaintenanceChordAuditMatrixBench.exe' |
             Copy-Item -Destination "$staging\bin\" -ErrorAction SilentlyContinue
           foreach ($f in @('README.md','LICENSE')) {
             if (Test-Path $f) { Copy-Item $f -Destination "$staging\" }
