@@ -31,14 +31,58 @@
 
 #include <ChordAuditMatrixBench/benchmark_report.h>
 
+#include <cmath>
 #include <cstddef>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 
 namespace CAMatrix::Audit::Benchmark {
 
 namespace {
+
+struct WilsonInterval {
+    double lower;
+    double upper;
+};
+
+WilsonInterval wilsonInterval(std::size_t successes, std::size_t trials)
+{
+    constexpr double z = 1.959963984540054;
+    const double n = static_cast<double>(trials);
+    const double p = static_cast<double>(successes) / n;
+    const double zSquared = z * z;
+    const double denominator = 1.0 + zSquared / n;
+    const double center = (p + zSquared / (2.0 * n)) / denominator;
+    const double margin = z * std::sqrt((p * (1.0 - p) / n)
+                                         + zSquared / (4.0 * n * n)) / denominator;
+    return {center - margin, center + margin};
+}
+
+std::string confidenceRateWithWilsonInterval(const PdpAuditResult& result)
+{
+    if (result.iterations == 0) return "N/A";
+    const WilsonInterval interval = wilsonInterval(result.detections, result.iterations);
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(2) << (result.confidenceRate * 100.0) << '%'
+       << " [" << (interval.lower * 100.0) << "%, " << (interval.upper * 100.0) << "%]";
+    return os.str();
+}
+
+void writeWilsonIntervalJson(std::ostringstream& os, const PdpAuditResult& result)
+{
+    if (result.iterations == 0) {
+        os << R"(      "confidenceRate95WilsonLower": null,)" << '\n'
+           << R"(      "confidenceRate95WilsonUpper": null,)" << '\n';
+        return;
+    }
+    const WilsonInterval interval = wilsonInterval(result.detections, result.iterations);
+    os << R"(      "confidenceRate95WilsonLower": )"
+       << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+       << interval.lower << ",\n"
+       << R"(      "confidenceRate95WilsonUpper": )" << interval.upper << ",\n";
+}
 
 /// Format a double in [0,1] as a fixed-point percentage string (e.g. "1.00%")
 std::string pct(double v)
@@ -181,7 +225,7 @@ std::string PdpDirectReport::toConsole() const
     oss << "  N (totalBlocks)    — Total number of data blocks\n";
     oss << "  t (corruptedBlocks)— Number of corrupted/stale blocks\n";
     oss << "  r (sampleSize)     — Blocks sampled per audit iteration\n";
-    oss << "  Confidence Rate    — Detections / iterations (empirical)\n";
+    oss << "  Confidence Rate    — Detections / iterations (empirical); 95% Wilson CI in brackets\n";
     oss << "  Theoretical Rate   — Hypergeometric probability\n\n";
 
     oss << std::left
@@ -190,10 +234,10 @@ std::string PdpDirectReport::toConsole() const
         << std::setw(8)  << "r"
         << std::setw(12) << "Iterations"
         << std::setw(16) << "Detected"
-        << std::setw(16) << "ConfRate"
+        << std::setw(32) << "ConfRate [95% Wilson CI]"
         << std::setw(16) << "Theoretical"
         << "\n";
-    oss << std::string(84, '-') << "\n";
+    oss << std::string(100, '-') << "\n";
 
     for (const auto* r : pdpResults_) {
         if (!r) continue;
@@ -203,8 +247,8 @@ std::string PdpDirectReport::toConsole() const
             << std::setw(8)  << r->sampleSize
             << std::setw(12) << r->iterations
             << std::setw(16) << r->detections
-            << std::setw(16) << std::fixed << std::setprecision(2) << r->confidenceRate
-            << std::setw(16) << std::fixed << std::setprecision(2) << r->theoreticalConfidenceRate
+            << std::setw(32) << confidenceRateWithWilsonInterval(*r)
+            << std::setw(16) << pct(r->theoreticalConfidenceRate)
             << "\n";
     }
 
@@ -234,8 +278,13 @@ std::string PdpDirectReport::toJson() const
         oss << "      \"sampleSize\": " << r->sampleSize << ",\n";
         oss << "      \"iterations\": " << r->iterations << ",\n";
         oss << "      \"detections\": " << r->detections << ",\n";
-        oss << "      \"confidenceRate\": " << std::fixed << std::setprecision(2) << r->confidenceRate << ",\n";
-        oss << "      \"theoreticalConfidenceRate\": " << std::fixed << std::setprecision(2) << r->theoreticalConfidenceRate << ",\n";
+        oss << R"(      "confidenceRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->confidenceRate << ",\n";
+        writeWilsonIntervalJson(oss, *r);
+        oss << R"(      "theoreticalConfidenceRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->theoreticalConfidenceRate << ",\n";
         oss << pdpCommonJson(*r, "    ");
         oss << "    }";
         if (i + 1 < pdpResults_.size()) oss << ",";
@@ -258,8 +307,7 @@ std::string PdpFixedRatioReport::toConsole() const
     oss << "Parameter Descriptions:\n";
     oss << "  N              — Total data blocks\n";
     oss << "  t/N%, r/N%     — Corrupted / sampled block ratios\n";
-    oss << "  Confidence Rate— Empirical detection rate\n\n";
-
+    oss << "  Confidence Rate — Empirical detection rate; 95% Wilson CI in brackets\n\n";
     oss << std::left
         << std::setw(8)  << "N"
         << std::setw(10) << "t/N%"
@@ -268,10 +316,10 @@ std::string PdpFixedRatioReport::toConsole() const
         << std::setw(8)  << "r"
         << std::setw(12) << "Iterations"
         << std::setw(12) << "Detected"
-        << std::setw(12) << "ConfRate"
+        << std::setw(30) << "ConfRate [95% Wilson CI]"
         << std::setw(12) << "Theoretical"
         << "\n";
-    oss << std::string(92, '-') << "\n";
+    oss << std::string(110, '-') << "\n";
 
     for (const auto* r : pdpResults_) {
         if (!r || r->totalBlocks == 0) continue;
@@ -285,8 +333,8 @@ std::string PdpFixedRatioReport::toConsole() const
             << std::setw(8)  << r->sampleSize
             << std::setw(12) << r->iterations
             << std::setw(12) << r->detections
-            << std::setw(12) << std::fixed << std::setprecision(2) << r->confidenceRate
-            << std::setw(12) << std::fixed << std::setprecision(2) << r->theoreticalConfidenceRate
+            << std::setw(30) << confidenceRateWithWilsonInterval(*r)
+            << std::setw(12) << pct(r->theoreticalConfidenceRate)
             << "\n";
     }
 
@@ -320,10 +368,17 @@ std::string PdpFixedRatioReport::toJson() const
         oss << "      \"sampleSize\": " << r->sampleSize << ",\n";
         oss << "      \"iterations\": " << r->iterations << ",\n";
         oss << "      \"detections\": " << r->detections << ",\n";
-        oss << "      \"confidenceRate\": " << std::fixed << std::setprecision(2) << r->confidenceRate << ",\n";
-        oss << "      \"theoreticalConfidenceRate\": " << std::fixed << std::setprecision(2) << r->theoreticalConfidenceRate << ",\n";
-        oss << "      \"corruptionRatio\": " << std::fixed << std::setprecision(2) << cRatio << ",\n";
-        oss << "      \"samplingRatio\": " << std::fixed << std::setprecision(2) << sRatio << ",\n";
+        oss << R"(      "confidenceRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->confidenceRate << ",\n";
+        writeWilsonIntervalJson(oss, *r);
+        oss << R"(      "theoreticalConfidenceRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->theoreticalConfidenceRate << ",\n";
+        oss << R"(      "corruptionRatio": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10) << cRatio << ",\n";
+        oss << R"(      "samplingRatio": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10) << sRatio << ",\n";
         oss << pdpCommonJson(*r, "    ");
         oss << "    }";
         if (i + 1 < pdpResults_.size()) oss << ",";
@@ -347,18 +402,18 @@ std::string PdpInverseConfidenceReport::toConsole() const
     oss << "  N              — Total data blocks\n";
     oss << "  t/N%, r/N%     — Corrupted / sampled block ratios\n";
     oss << "  r              — Min samples to hit target confidence P*\n";
-    oss << "  Confidence Rate— Empirical detection rate\n\n";
+    oss << "  Confidence Rate — Empirical detection rate; 95% Wilson CI in brackets\n\n";
 
     oss << std::left
         << std::setw(8)  << "N"
         << std::setw(10) << "t/N%"
         << std::setw(8)  << "r"
         << std::setw(10) << "r/N%"
-        << std::setw(14) << "ConfRate"
+        << std::setw(34) << "ConfRate [95% Wilson CI]"
         << std::setw(14) << "Theoretical"
         << std::setw(12) << "Iterations"
         << "\n";
-    oss << std::string(76, '-') << "\n";
+    oss << std::string(96, '-') << "\n";
 
     for (const auto* r : pdpResults_) {
         if (!r || r->totalBlocks == 0) continue;
@@ -369,8 +424,8 @@ std::string PdpInverseConfidenceReport::toConsole() const
             << std::setw(10) << pct(cRatio)
             << std::setw(8)  << r->sampleSize
             << std::setw(10) << pct(sRatio)
-            << std::setw(14) << std::fixed << std::setprecision(2) << r->confidenceRate
-            << std::setw(14) << std::fixed << std::setprecision(2) << r->theoreticalConfidenceRate
+            << std::setw(34) << confidenceRateWithWilsonInterval(*r)
+            << std::setw(14) << pct(r->theoreticalConfidenceRate)
             << std::setw(12) << r->iterations
             << "\n";
     }
@@ -405,10 +460,17 @@ std::string PdpInverseConfidenceReport::toJson() const
         oss << "      \"sampleSize\": " << r->sampleSize << ",\n";
         oss << "      \"iterations\": " << r->iterations << ",\n";
         oss << "      \"detections\": " << r->detections << ",\n";
-        oss << "      \"confidenceRate\": " << std::fixed << std::setprecision(2) << r->confidenceRate << ",\n";
-        oss << "      \"theoreticalConfidenceRate\": " << std::fixed << std::setprecision(2) << r->theoreticalConfidenceRate << ",\n";
-        oss << "      \"corruptionRatio\": " << std::fixed << std::setprecision(2) << cRatio << ",\n";
-        oss << "      \"samplingRatio\": " << std::fixed << std::setprecision(2) << sRatio << ",\n";
+        oss << R"(      "confidenceRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->confidenceRate << ",\n";
+        writeWilsonIntervalJson(oss, *r);
+        oss << R"(      "theoreticalConfidenceRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->theoreticalConfidenceRate << ",\n";
+        oss << R"(      "corruptionRatio": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10) << cRatio << ",\n";
+        oss << R"(      "samplingRatio": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10) << sRatio << ",\n";
         oss << pdpCommonJson(*r, "    ");
         oss << "    }";
         if (i + 1 < pdpResults_.size()) oss << ",";
@@ -447,7 +509,7 @@ std::string IdentityReport::toConsole() const
         << std::setw(8)  << "Users"
         << std::setw(14) << "Samples/Iter"
         << std::setw(12) << "Iterations"
-        << std::setw(14) << "Accuracy"
+        << std::setw(14) << "Accuracy %"
         << std::setw(12) << "TP/Iter"
         << std::setw(12) << "FP/Iter"
         << std::setw(12) << "TN/Iter"
@@ -462,7 +524,7 @@ std::string IdentityReport::toConsole() const
             << std::setw(14) << std::fixed << std::setprecision(2)
             << r->averageVerifySamples
             << std::setw(12) << r->iterations
-            << std::setw(14) << r->accuracyRate
+            << std::setw(14) << pct(r->accuracyRate)
             << std::setw(12) << r->averageTrueAccepts
             << std::setw(12) << r->averageFalseAccepts
             << std::setw(12) << r->averageTrueRejects
@@ -537,7 +599,9 @@ std::string IdentityReport::toJson() const
         oss << "      \"wallTimeMs\": " << std::fixed << std::setprecision(2)
             << r->wallTimeMs << ",\n";
         oss << "      \"algorithmKind\": \"" << r->algorithmKind << "\",\n";
-        oss << "      \"accuracyRate\": " << std::fixed << std::setprecision(2) << r->accuracyRate << ",\n";
+        oss << R"(      "accuracyRate": )"
+            << std::defaultfloat << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << r->accuracyRate << ",\n";
         oss << "      \"trueAccepts\": " << r->trueAccepts << ",\n";
         oss << "      \"averageTrueAccepts\": " << std::fixed << std::setprecision(2)
             << r->averageTrueAccepts << ",\n";

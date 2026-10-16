@@ -117,6 +117,87 @@ TEST(BenchmarkReportTest, EveryReportRendersThroughTheReportInterface)
     }
 }
 
+TEST(PdpReportTest, ShowsWilsonIntervalBesideEmpiricalRateAndInJson)
+{
+    auto result = std::make_unique<PdpAuditResult>();
+    result->totalBlocks = 7;
+    result->corruptedBlocks = 2;
+    result->sampleSize = 3;
+    result->iterations = 4;
+    result->detections = 3;
+    result->confidenceRate = 0.75;
+    result->theoreticalConfidenceRate = 5.0 / 7.0;
+
+    ResultVec results;
+    results.push_back(std::move(result));
+    std::vector<std::unique_ptr<Report>> reports;
+    reports.emplace_back(std::make_unique<PdpDirectReport>(results, "SM9Static"));
+    reports.emplace_back(std::make_unique<PdpFixedRatioReport>(results, "SM9Static"));
+    reports.emplace_back(std::make_unique<PdpInverseConfidenceReport>(results, "SM9Static"));
+
+    for (const auto& report : reports) {
+        const std::string console = report->toConsole();
+        EXPECT_NE(console.find("ConfRate [95% Wilson CI]"), std::string::npos);
+        EXPECT_NE(console.find("75.00% [30.06%, 95.44%]"), std::string::npos);
+
+        const Json::Value item = parseJson(report->toJson())["results"][0];
+        EXPECT_DOUBLE_EQ(item["confidenceRate"].asDouble(), 0.75);
+        EXPECT_NEAR(item["confidenceRate95WilsonLower"].asDouble(), 0.300641842582436, 1e-12);
+        EXPECT_NEAR(item["confidenceRate95WilsonUpper"].asDouble(), 0.954412739190299, 1e-12);
+        EXPECT_DOUBLE_EQ(item["theoreticalConfidenceRate"].asDouble(), 5.0 / 7.0);
+        if (item.isMember("corruptionRatio")) {
+            EXPECT_DOUBLE_EQ(item["corruptionRatio"].asDouble(), 2.0 / 7.0);
+            EXPECT_DOUBLE_EQ(item["samplingRatio"].asDouble(), 3.0 / 7.0);
+        }
+    }
+}
+
+TEST(IdentityReportTest, DisplaysAccuracyAsPercentAndPreservesJsonPrecision)
+{
+    auto result = std::make_unique<IdentityResult>();
+    result->algorithmType = "SM9Noncert";
+    result->numUsers = 2;
+    result->totalVerifySamples = 6;
+    result->averageVerifySamples = 6.0;
+    result->iterations = 1;
+    result->accuracyRate = 5.0 / 6.0;
+    result->trueAccepts = 3;
+    result->falseAccepts = 1;
+    result->trueRejects = 2;
+    result->falseRejects = 0;
+    result->averageTrueAccepts = 3.0;
+    result->averageFalseAccepts = 1.0;
+    result->averageTrueRejects = 2.0;
+
+    ResultVec results;
+    results.push_back(std::move(result));
+    const IdentityReport concreteReport(results, "SM9Noncert");
+    const Report& report = concreteReport;
+
+    EXPECT_NE(report.toConsole().find("Accuracy %"), std::string::npos);
+    EXPECT_NE(report.toConsole().find("83.33%"), std::string::npos);
+    const Json::Value item = parseJson(report.toJson())["results"][0];
+    EXPECT_DOUBLE_EQ(item["accuracyRate"].asDouble(), 5.0 / 6.0);
+}
+
+TEST(PdpReportTest, UsesNullIntervalAndNAWhenThereAreNoIterations)
+{
+    auto result = std::make_unique<PdpAuditResult>();
+    result->algorithmType = "SM9Static";
+    result->totalBlocks = 8;
+    result->iterations = 0;
+    result->detections = 0;
+
+    ResultVec results;
+    results.push_back(std::move(result));
+    const PdpDirectReport report(results, "SM9Static");
+    const Report& baseReport = report;
+    EXPECT_NE(baseReport.toConsole().find("N/A"), std::string::npos);
+    const Json::Value item = parseJson(baseReport.toJson())["results"][0];
+    EXPECT_TRUE(item["confidenceRate95WilsonLower"].isNull());
+    EXPECT_TRUE(item["confidenceRate95WilsonUpper"].isNull());
+}
+
 // ============================================================================
 // DynamicMaintenanceReport console/JSON contract
 // ============================================================================

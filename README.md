@@ -71,6 +71,14 @@ add_subdirectory(3rdparty/ChordAuditMatrixBench EXCLUDE_FROM_ALL)
 --help                      Show help message
 ```
 
+PDP reports show the empirical detection rate and its 95% Wilson interval as
+percentages with two decimal places (for example, `75.00% [30.06%, 95.44%]`).
+The theoretical rate and ratio columns use the same percentage format. JSON
+stores rate and ratio values as full-precision fractions in `[0,1]`; the Wilson
+bound fields are `confidenceRate95WilsonLower` and
+`confidenceRate95WilsonUpper`, and are `null` when there are no iterations.
+`theoreticalConfidenceRate` remains the separate hypergeometric probability.
+
 ### Identity Verification Benchmark
 
 ```
@@ -86,6 +94,10 @@ add_subdirectory(3rdparty/ChordAuditMatrixBench EXCLUDE_FROM_ALL)
 --list-algorithms           List available identity algorithms and exit
 --help                      Show help message
 ```
+
+Identity console reports show accuracy as a percentage with two decimal places.
+Outcome totals are integers; per-iteration averages use two decimal places.
+JSON keeps `accuracyRate` as a full-precision fraction in `[0,1]`.
 
 ### Dynamic Maintenance Benchmark
 
@@ -103,6 +115,10 @@ add_subdirectory(3rdparty/ChordAuditMatrixBench EXCLUDE_FROM_ALL)
 --json <path>               Write JSON report to file
 --help                      Show help message
 ```
+
+Maintenance totals remain integers. Console latency values use four decimal
+places and end-to-end throughput uses two; JSON keeps numeric values suitable
+for machine processing.
 
 Iteration semantics — exactly one maintenance call per iteration, on legal
 1-based block indices of the worker's own store:
