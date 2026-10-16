@@ -199,8 +199,8 @@ std::unique_ptr<BenchmarkResult> pdpRun(BenchmarkRunner& runner, const Benchmark
     if (pdp) {
         pdp->theoreticalConfidenceRate = theoreticalConfidenceRate(
             cfg.totalBlocks, cfg.corruptedBlocks, cfg.sampleSize);
-        spdlog::info("confidence={:.2f} theoretical={:.2f}",
-                     pdp->confidenceRate, pdp->theoreticalConfidenceRate);
+        spdlog::info("confidence={:.2f}% theoretical={:.2f}%",
+                     pdp->confidenceRate * 100.0, pdp->theoreticalConfidenceRate * 100.0);
     }
     return result;
 }
